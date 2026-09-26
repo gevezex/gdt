@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { type Role, ROLES } from "../config.js";
 import { which } from "../doctor.js";
-import { alive } from "../state.js";
+import { alive, writeJsonAtomic } from "../state.js";
 import type { Backend } from "./backend.js";
 
 type Env = Record<string, string | undefined>;
@@ -119,8 +119,7 @@ function readPanes(file: string): PaneState | null {
 }
 
 function writePanes(file: string, state: PaneState): void {
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+  writeJsonAtomic(file, state);
 }
 
 function roleTitle(role: PaneName, agent: string, state: string): string {
