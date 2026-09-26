@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { type ConfigReport, CONFIG_PATH, LOCAL_CONFIG_PATH, loadConfig } from "./config.js";
+import { adapterFor } from "./agents/index.js";
+import { type ConfigReport, CONFIG_PATH, LOCAL_CONFIG_PATH, loadConfig, type ResolvedConfig, ROLES } from "./config.js";
 import { type Finding, hasErrors } from "./finding.js";
 
 export interface DoctorReport {
@@ -104,6 +105,35 @@ function excludeFinding(root: string, git: string | undefined, env: Env): Findin
   }
 }
 
+/** Checks the agent binary of every configured role, and that the tester is independent of the developer. */
+function agentFindings(config: ResolvedConfig, env: Env): Finding[] {
+  const findings: Finding[] = [];
+  for (const role of ROLES) {
+    const { agent } = config.roles[role];
+    const adapter = adapterFor(agent);
+    if (adapter === undefined) continue;
+    const check = `roles.${role}`;
+    const path = which(adapter.binary, env);
+    findings.push(
+      path === null
+        ? { check, level: "error", message: `roles.${role}: ${adapter.binary} not found on PATH`, fix: adapter.install }
+        : { check, level: "ok", message: `roles.${role}: ${adapter.binary} found at ${path}`, fix: "" },
+    );
+  }
+
+  const vendor = (role: "developer" | "tester") => adapterFor(config.roles[role].agent)?.vendorOf(config.roles[role].model);
+  const developer = vendor("developer");
+  if (developer !== undefined && developer === vendor("tester")) {
+    findings.push({
+      check: "roles.tester",
+      level: "warning",
+      message: `developer and tester both use ${developer}; use a different vendor for the tester for independent verification`,
+      fix: "Set roles.tester to an agent and model from another vendor",
+    });
+  }
+  return findings;
+}
+
 export function runDoctor(cwd: string, env: Env): DoctorReport {
   const findings: Finding[] = [];
   const tools = toolFindings(env);
@@ -128,6 +158,7 @@ export function runDoctor(cwd: string, env: Env): DoctorReport {
     findings.push(excludeFinding(root, tools.paths.get("git"), env));
   }
   findings.push(...configFindings);
+  if (report.valid) findings.push(...agentFindings(report, env));
 
   return { ok: !hasErrors(findings), repository: root, config: report, findings };
 }

@@ -1,23 +1,22 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { adapterFor, type Invocation } from "./agents/index.js";
 import { loadConfig, type ResolvedRole, type Role, TEST_AGENT, testAgentsEnabled } from "./config.js";
 import { alive, paths, readJson, readState, writeJsonAtomic } from "./state.js";
 import type { Dispatch, TurnResult } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
 
-export interface Invocation {
-  argv: string[];
-  env: Env;
-}
-
-/** The command for one unattended turn. Real agent adapters arrive with #5; only the test agent runs here. */
-export function invocation(role: ResolvedRole, root: string, promptFile: string, env: Env): Invocation {
-  if (role.agent === TEST_AGENT && role.script !== undefined && testAgentsEnabled(env)) {
-    return { argv: ["/bin/sh", resolve(root, role.script)], env: { GDT_PROMPT_FILE: promptFile } };
+/** The command for one unattended turn: the role's agent adapter, or the test agent's script. */
+export function invocation(roleName: Role, role: ResolvedRole, root: string, promptFile: string, env: Env): Invocation {
+  if (role.agent === TEST_AGENT) {
+    if (role.script === undefined || !testAgentsEnabled(env)) throw new Error(`agent "${TEST_AGENT}" requires GDT_TEST_AGENTS=1 and a script`);
+    return { argv: ["/bin/sh", resolve(root, role.script)], env: { GDT_PROMPT_FILE: promptFile }, stdin: null };
   }
-  throw new Error(`no adapter for agent "${role.agent}" yet`);
+  const adapter = adapterFor(role.agent);
+  if (adapter === undefined) throw new Error(`no adapter for agent "${role.agent}" yet`);
+  return adapter.buildInvocation(roleName, role.model, promptFile, root);
 }
 
 function log(line: string): void {
@@ -44,16 +43,32 @@ function prompt(dispatch: Dispatch): string {
   ].join("\n");
 }
 
-function run(argv: readonly string[], cwd: string, env: Env): Promise<number | null> {
-  const [command, ...args] = argv;
+/** Runs one invocation and passes the agent's exit code through unchanged (null when killed by a signal). */
+export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<number | null> {
+  const [command, ...args] = inv.argv;
   return new Promise((done) => {
+    let stdin: number | "ignore" = "ignore";
+    try {
+      if (inv.stdin !== null) stdin = openSync(inv.stdin, "r");
+    } catch (err) {
+      log(`cannot open prompt file: ${err instanceof Error ? err.message : String(err)}`);
+      done(66);
+      return;
+    }
     // Same process group as the worker, so stopping the worker stops the agent too.
-    const child = spawn(command ?? "", args, { cwd, env, stdio: ["ignore", "inherit", "inherit"] });
+    const child = spawn(command ?? "", args, { cwd, env: { ...env, ...inv.env }, stdio: [stdin, "inherit", "inherit"] });
+    const close = () => {
+      if (typeof stdin === "number") closeSync(stdin);
+    };
     child.on("error", (err) => {
       log(`agent could not start: ${err.message}`);
+      close();
       done(127);
     });
-    child.on("close", (code) => done(code));
+    child.on("close", (code) => {
+      close();
+      done(code);
+    });
   });
 }
 
@@ -86,7 +101,7 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
 
   let inv: Invocation;
   try {
-    inv = invocation(report.roles[role], root, promptFile, env);
+    inv = invocation(role, report.roles[role], root, promptFile, env);
   } catch (err) {
     log(err instanceof Error ? err.message : String(err));
     finish(127);
@@ -96,7 +111,6 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
   log(`turn ${dispatch.key}: ${inv.argv.join(" ")}`);
   const turnEnv: Env = {
     ...env,
-    ...inv.env,
     GDT_ISSUE: String(dispatch.issue),
     GDT_REPOSITORY: dispatch.repository,
     GDT_ROLE: role,
@@ -106,7 +120,7 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     GDT_ISSUE_BODY_SHA256: dispatch.issue_body_sha256,
     GDT_DISPATCH_KEY: dispatch.key,
   };
-  finish(await run(inv.argv, root, turnEnv));
+  finish(await runInvocation(inv, root, turnEnv));
 }
 
 /** Waits for dispatches for `role` without a model and runs one agent turn per dispatch key. */
