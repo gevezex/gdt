@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runDoctor } from "./doctor.js";
+import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig } from "./config.js";
+import { validateContract } from "./contract.js";
+import { findRepository, runDoctor } from "./doctor.js";
 import type { Finding } from "./finding.js";
+import { issueBody } from "./github.js";
+import { loadLocale } from "./locale.js";
 
 export interface Io {
   cwd: string;
@@ -23,9 +28,10 @@ Usage:
 
 Commands:
   doctor        Check tools, GitHub authentication and .gdt/config.toml
+  check-issue   Validate an issue body against the issue contract
 
 Options:
-  --json        Machine-readable output (doctor)
+  --json        Machine-readable output
   --help, -h    Show help
   --version     Print the gdt version
 `;
@@ -35,6 +41,13 @@ const DOCTOR_HELP = `Usage: gdt doctor [--json]
 Checks that git and gh are installed, gh is authenticated, and that
 .gdt/config.toml (merged with .gdt/config.local.toml) is valid.
 Exits with 1 when any finding has level "error".
+`;
+
+const CHECK_ISSUE_HELP = `Usage: gdt check-issue <issue> [--json]
+
+Fetches the body of the issue with "gh issue view" and validates it against the
+issue contract for the configured language (language in .gdt/config.toml,
+default en). Exits with 1 when the contract is invalid.
 `;
 
 export function version(): string {
@@ -72,6 +85,59 @@ function doctor(args: readonly string[], io: Io): number {
   return report.ok ? EXIT_OK : EXIT_FAILED;
 }
 
+function checkIssue(args: readonly string[], io: Io): number {
+  let json = false;
+  let issue: number | undefined;
+  for (const arg of args) {
+    if (arg === "--json") json = true;
+    else if (arg === "--help" || arg === "-h") {
+      io.stdout(CHECK_ISSUE_HELP);
+      return EXIT_OK;
+    } else if (arg.startsWith("-")) {
+      return usageError(io, `Unknown option "${arg}" for "gdt check-issue".`, "gdt check-issue --help");
+    } else if (issue === undefined && /^[1-9]\d*$/.test(arg)) issue = Number(arg);
+    else return usageError(io, `Unexpected argument "${arg}" for "gdt check-issue".`, "gdt check-issue --help");
+  }
+  if (issue === undefined) return usageError(io, 'Missing issue number for "gdt check-issue".', "gdt check-issue --help");
+
+  const root = findRepository(io.cwd) ?? io.cwd;
+  let language = DEFAULT_LANGUAGE;
+  let maxAcceptanceCriteria = DEFAULT_MAX_ACCEPTANCE_CRITERIA;
+  if (existsSync(join(root, CONFIG_PATH))) {
+    const { report } = loadConfig(root);
+    if (!report.valid) {
+      io.stderr(`${CONFIG_PATH} is invalid. Run "gdt doctor" for details.\n`);
+      return EXIT_FAILED;
+    }
+    language = report.language;
+    maxAcceptanceCriteria = report.contract.max_acceptance_criteria;
+  }
+
+  let locale;
+  try {
+    locale = loadLocale(language);
+  } catch (err) {
+    io.stderr(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT_FAILED;
+  }
+
+  const fetched = issueBody(issue, root, io.env);
+  if ("error" in fetched) {
+    io.stderr(`${fetched.error}\n`);
+    return EXIT_FAILED;
+  }
+
+  const result = validateContract(fetched.body, locale, { maxAcceptanceCriteria });
+  if (json) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
+  else if (result.valid) {
+    io.stdout(`Issue #${issue}: contract valid (${result.acceptance_criteria.length} acceptance criteria)\n`);
+  } else {
+    const lines = result.errors.map((error) => `  - ${error}`);
+    io.stdout(`Issue #${issue}: contract invalid (${result.errors.length} error(s))\n${lines.join("\n")}\n`);
+  }
+  return result.valid ? EXIT_OK : EXIT_FAILED;
+}
+
 export function run(argv: readonly string[], io: Io): number {
   const [command, ...rest] = argv;
   switch (command) {
@@ -86,6 +152,8 @@ export function run(argv: readonly string[], io: Io): number {
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io);
+    case "check-issue":
+      return checkIssue(rest, io);
     default:
       if (command.startsWith("-")) return usageError(io, `Unknown option "${command}".`, "gdt --help");
       return usageError(io, `Unknown command "${command}".`, "gdt --help");

@@ -37,7 +37,8 @@ export function which(name: string, env: Env): string | null {
   return null;
 }
 
-function findRepository(cwd: string): string | null {
+/** The nearest directory at or above `cwd` that contains `.git`. */
+export function findRepository(cwd: string): string | null {
   for (let dir = resolve(cwd); ; dir = dirname(dir)) {
     if (existsSync(join(dir, ".git"))) return dir;
     if (dirname(dir) === dir) return null;
