@@ -1,0 +1,39 @@
+{
+  "name": "@gevezex/gdt",
+  "version": "0.0.0",
+  "description": "GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.",
+  "license": "MIT",
+  "author": "Ayhan Cicek",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gevezex/gdt.git"
+  },
+  "type": "module",
+  "bin": {
+    "gdt": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint . && tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "smol-toml": "^1.9.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.19.0",
+    "eslint": "^10.11.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  }
+}

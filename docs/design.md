@@ -153,11 +153,12 @@ terminal = "herdr"              # "herdr" | "headless"
 
 [contract]
 max_acceptance_criteria = 8
-extra_rules = ".gdt/rules.md"   # optional project rules appended to role prompts
 ```
 
-- `extra_rules` is where project-specific invariants live (for example "a local
-  match is no proof of external processing"). gdt itself ships none.
+- The optional `contract.extra_rules` (for example `extra_rules = ".gdt/rules.md"`)
+  points to project rules appended to role prompts. That is where project-specific
+  invariants live (for example "a local match is no proof of external processing").
+  gdt itself ships none. A configured file that does not exist is a `doctor` error.
 - `required_checks = []` refuses `ready_to_merge` unless
   `allow_no_required_checks = true`. An empty gate must never look like a green one.
 - `gdt doctor` warns when developer and tester use the same model vendor, because
