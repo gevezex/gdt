@@ -1,0 +1,17 @@
+language = "en"
+
+[roles.developer]
+agent = "opencode"
+model = "deepseek/deepseek-v4-flash"
+
+[roles.tester]
+agent = "claude"
+model = "claude-sonnet-5"
+
+[roles.reviewer]
+agent = "codex"
+model = "gpt-5.6-luna"
+
+[workflow]
+required_checks = ["test"]
+terminal = "headless"
