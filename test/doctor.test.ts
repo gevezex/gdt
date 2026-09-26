@@ -19,7 +19,7 @@ function errors(report: DoctorReport) {
 
 describe("AC-3: valid configuration is reported", () => {
   it("reports the resolved roles, well-formed findings and exits 0", () => {
-    const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG, ".gdt/rules.md": "" });
+    const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG });
     const { code, stdout, report } = doctorJson(root);
 
     // The exact JSON path from the issue, independent of the TypeScript types.
@@ -44,12 +44,32 @@ describe("AC-3: valid configuration is reported", () => {
     expect(code).toBe(0);
   });
 
-  it("warns but passes when contract.extra_rules points to a missing file", () => {
-    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG }));
-    expect(report.findings).toContainEqual(
-      expect.objectContaining({ check: "contract.extra_rules", level: "warning" }),
-    );
+  it("reports no contract.extra_rules finding when the key is not configured", () => {
+    const { report } = doctorJson(tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG }));
+    expect(report.findings.map((f) => f.check)).not.toContain("contract.extra_rules");
+  });
+});
+
+describe("contract.extra_rules", () => {
+  const config = withKey(EXAMPLE_CONFIG, "contract", 'extra_rules = ".gdt/rules.md"');
+
+  it("is ok when the configured file exists", () => {
+    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": config, ".gdt/rules.md": "" }));
+    expect(report.findings).toContainEqual({
+      check: "contract.extra_rules",
+      level: "ok",
+      message: "contract.extra_rules: .gdt/rules.md found",
+      fix: "",
+    });
     expect(code).toBe(0);
+  });
+
+  it("is an error when the configured file is missing", () => {
+    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": config }));
+    expect(errors(report)).toContainEqual(
+      expect.objectContaining({ check: "contract.extra_rules", message: "contract.extra_rules: .gdt/rules.md not found" }),
+    );
+    expect(code).toBe(1);
   });
 
   it("applies defaults for optional keys", () => {
@@ -158,21 +178,21 @@ describe("AC-6: an empty required-checks list is not silently accepted", () => {
     ["false", empty],
     ["absent", empty.replace(/^allow_no_required_checks.*\n/m, "")],
   ])("is an error when allow_no_required_checks is %s", (_name, config) => {
-    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": config, ".gdt/rules.md": "" }));
+    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": config }));
     expect(report.findings).toContainEqual(expect.objectContaining({ level: "error", message }));
     expect(code).toBe(1);
   });
 
   it("is a warning when allow_no_required_checks = true", () => {
     const config = empty.replace("allow_no_required_checks = false", "allow_no_required_checks = true");
-    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": config, ".gdt/rules.md": "" }));
+    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": config }));
     expect(report.findings).toContainEqual(expect.objectContaining({ level: "warning", message }));
     expect(code).toBe(0);
   });
 });
 
 describe("AC-7: missing external tools are reported with a fix", () => {
-  const files = { ".gdt/config.toml": EXAMPLE_CONFIG, ".gdt/rules.md": "" };
+  const files = { ".gdt/config.toml": EXAMPLE_CONFIG };
 
   it("reports a missing gh", () => {
     const { code, report } = doctorJson(tempRepo(files), fakePath({ gh: false }));

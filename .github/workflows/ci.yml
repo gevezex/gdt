@@ -16,7 +16,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version-file: package.json
+          # Pinned to the current LTS; engines.node (">=24") would resolve to the newest release.
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build

@@ -219,13 +219,18 @@ function semanticFindings(root: string, config: Config): Finding[] {
   }
 
   const rules = config.contract.extra_rules;
-  if (rules !== undefined && !existsSync(join(root, rules))) {
-    findings.push({
-      check: "contract.extra_rules",
-      level: "warning",
-      message: `contract.extra_rules: ${rules} not found`,
-      fix: `Create ${rules} or remove contract.extra_rules`,
-    });
+  if (rules !== undefined) {
+    // A configured file that does not exist is almost always a typo.
+    findings.push(
+      existsSync(join(root, rules))
+        ? { check: "contract.extra_rules", level: "ok", message: `contract.extra_rules: ${rules} found`, fix: "" }
+        : {
+            check: "contract.extra_rules",
+            level: "error",
+            message: `contract.extra_rules: ${rules} not found`,
+            fix: `Create ${rules} or correct or remove contract.extra_rules`,
+          },
+    );
   }
 
   return findings;

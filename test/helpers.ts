@@ -27,7 +27,6 @@ terminal = "herdr"              # "herdr" | "headless"
 
 [contract]
 max_acceptance_criteria = 8
-extra_rules = ".gdt/rules.md"   # optional project rules appended to role prompts
 `;
 
 const found = which("git", process.env);
