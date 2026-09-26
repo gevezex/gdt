@@ -20,11 +20,17 @@ function errors(report: DoctorReport) {
 describe("AC-3: valid configuration is reported", () => {
   it("reports the resolved roles, well-formed findings and exits 0", () => {
     const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG, ".gdt/rules.md": "" });
-    const { code, report } = doctorJson(root);
+    const { code, stdout, report } = doctorJson(root);
+
+    // The exact JSON path from the issue, independent of the TypeScript types.
+    const json = JSON.parse(stdout) as { config: Record<string, unknown> & { roles: Record<string, unknown> } };
+    expect(json.config.valid).toBe(true);
+    expect(json.config.roles.tester).toEqual({ agent: "claude", model: "claude-sonnet-5", source: ".gdt/config.toml" });
+    expect(json.config).not.toHaveProperty("config");
 
     expect(report.config.valid).toBe(true);
     if (!report.config.valid) return;
-    expect(report.config.config.roles).toEqual({
+    expect(report.config.roles).toEqual({
       developer: { agent: "opencode", model: "deepseek/deepseek-v4-flash", source: ".gdt/config.toml" },
       tester: { agent: "claude", model: "claude-sonnet-5", source: ".gdt/config.toml" },
       reviewer: { agent: "codex", model: "gpt-5.6-luna", source: ".gdt/config.toml" },
@@ -54,9 +60,9 @@ describe("AC-3: valid configuration is reported", () => {
     const { report } = doctorJson(tempRepo({ ".gdt/config.toml": minimal }));
     expect(report.config.valid).toBe(true);
     if (!report.config.valid) return;
-    expect(report.config.config.language).toBe("en");
-    expect(report.config.config.workflow).toMatchObject({ max_correction_rounds: 2, terminal: "herdr" });
-    expect(report.config.config.contract).toEqual({ max_acceptance_criteria: 8 });
+    expect(report.config.language).toBe("en");
+    expect(report.config.workflow).toMatchObject({ max_correction_rounds: 2, terminal: "herdr" });
+    expect(report.config.contract).toEqual({ max_acceptance_criteria: 8 });
   });
 });
 
@@ -122,12 +128,12 @@ describe("AC-5: local override wins and shows its source", () => {
       const { report } = doctorJson(root);
       expect(report.config.valid).toBe(true);
       if (!report.config.valid) return;
-      expect(report.config.config.roles.tester).toEqual({
+      expect(report.config.roles.tester).toEqual({
         agent: "claude",
         model: "claude-haiku-4-5",
         source: ".gdt/config.local.toml",
       });
-      expect(report.config.config.roles.developer.source).toBe(".gdt/config.toml");
+      expect(report.config.roles.developer.source).toBe(".gdt/config.toml");
     }
 
     const exclude = readFileSync(join(root, ".git/info/exclude"), "utf8").split("\n");

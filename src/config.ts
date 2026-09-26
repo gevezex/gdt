@@ -54,8 +54,9 @@ export interface ResolvedConfig extends Omit<Config, "roles"> {
   roles: Record<Role, ResolvedRole>;
 }
 
+/** Serialised as-is under `config` in `gdt doctor --json`; keep these paths stable. */
 export type ConfigReport =
-  | { valid: true; files: string[]; config: ResolvedConfig }
+  | ({ valid: true; files: string[] } & ResolvedConfig)
   | { valid: false; files: string[] };
 
 interface Layer {
@@ -199,7 +200,7 @@ export function loadConfig(root: string): { report: ConfigReport; findings: Find
   });
   findings.push(...semanticFindings(root, config));
 
-  return { report: { valid: true, files, config: { ...config, roles } }, findings };
+  return { report: { valid: true, files, ...config, roles }, findings };
 }
 
 /** Checks that pass the schema but would make gdt unsafe or surprising. */
