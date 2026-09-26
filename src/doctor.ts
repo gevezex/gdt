@@ -123,7 +123,7 @@ export function runDoctor(cwd: string, env: Env): DoctorReport {
     return { ok: false, repository: null, config: { valid: false, files: [] }, findings };
   }
 
-  const { report, findings: configFindings } = loadConfig(root);
+  const { report, findings: configFindings } = loadConfig(root, env);
   if (existsSync(join(root, CONFIG_PATH)) || existsSync(join(root, LOCAL_CONFIG_PATH))) {
     findings.push(excludeFinding(root, tools.paths.get("git"), env));
   }

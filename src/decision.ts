@@ -32,7 +32,7 @@ export interface Snapshot {
 }
 
 export type Decision =
-  | { action: "dispatch"; role: Role; round: number; reason: string }
+  | { action: "dispatch"; role: Role; round: number; reason: string; /** Set when resuming after this answered question. */ question_id?: string }
   | { action: "awaiting_human" | "waiting_for_checks" | "ready_to_merge" | "blocked"; reason: string };
 
 type Of<K extends ProtocolRecord["kind"]> = Extract<ProtocolRecord, { kind: K }>;
@@ -86,6 +86,7 @@ function questionDecision(records: readonly ProtocolRecord[]): Decision | undefi
     role,
     round: last.q.data.round,
     reason: `${last.q.data.question_id} answered; resuming ${role}`,
+    question_id: last.q.data.question_id,
   };
 }
 

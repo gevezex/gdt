@@ -1,0 +1,151 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import type { Role } from "./config.js";
+
+type Env = Record<string, string | undefined>;
+
+export const STATUSES = [
+  "starting",
+  "running",
+  "awaiting_human",
+  "waiting_for_checks",
+  "ready_to_merge",
+  "blocked",
+  "contract_changed",
+  "failed",
+  "stopped",
+] as const;
+export type Status = (typeof STATUSES)[number];
+
+/** Statuses that notify the user when the workflow enters them. */
+export const NOTIFY_STATUSES: readonly Status[] = ["awaiting_human", "blocked", "failed", "ready_to_merge"];
+
+export interface Inflight {
+  key: string;
+  role: Role;
+  round: number;
+  dispatched_at: string;
+  /** Highest comment id seen at dispatch; the handoff is a newer comment (ids only grow on GitHub). */
+  after_comment_id: number;
+  /** Fresh GitHub checks made for the handoff after the agent exited 0. */
+  checks: number;
+  /** Set when the handoff never became visible; the key stays blocked until a retry. */
+  missing: boolean;
+}
+
+/** `.git/gdt/issue-<n>/state.json`. Written only by the supervisor, or by the CLI when no supervisor runs. */
+export interface State {
+  version: 1;
+  issue: number;
+  workflow_id: string;
+  status: Status;
+  reason: string;
+  role: Role | null;
+  round: number | null;
+  exit_code: number | null;
+  repository: string;
+  pr_number: number | null;
+  head: string | null;
+  head_transition_at: string | null;
+  contract: { sha256: string; changelog: string } | null;
+  dispatched: string[];
+  inflight: Inflight | null;
+  notified_status: Status | null;
+  pids: { supervisor: number | null; workers: Partial<Record<Role, number>> };
+  updated_at: string;
+}
+
+export interface Paths {
+  root: string;
+  dir: string;
+  state: string;
+  lock: string;
+  logs: string;
+  dispatch: (role: Role) => string;
+  started: (key: string) => string;
+  result: (key: string) => string;
+  prompt: (key: string) => string;
+}
+
+/** The repository's common Git directory, so worktrees share one state. */
+function gitDir(root: string, env: Env): string {
+  const result = spawnSync("git", ["rev-parse", "--git-common-dir"], { cwd: root, env, encoding: "utf8" });
+  if (result.status === 0 && result.stdout.trim() !== "") return resolve(root, result.stdout.trim());
+  return join(root, ".git");
+}
+
+export function paths(root: string, issue: number, env: Env): Paths {
+  const dir = join(gitDir(root, env), "gdt", `issue-${issue}`);
+  return {
+    root,
+    dir,
+    state: join(dir, "state.json"),
+    lock: join(dir, "supervisor.lock"),
+    logs: join(dir, "logs"),
+    dispatch: (role) => join(dir, "dispatch", `${role}.json`),
+    started: (key) => join(dir, "runs", `${key}.started`),
+    result: (key) => join(dir, "runs", `${key}.result.json`),
+    prompt: (key) => join(dir, "runs", `${key}.prompt.md`),
+  };
+}
+
+/** Writes via a temporary file and rename, so readers never see a partial file. */
+export function writeJsonAtomic(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  renameSync(tmp, path);
+}
+
+export function readJson<T>(path: string): T | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function readState(p: Paths): State | null {
+  return readJson<State>(p.state);
+}
+
+export function writeState(p: Paths, state: State, now: Date = new Date()): void {
+  state.updated_at = now.toISOString();
+  writeJsonAtomic(p.state, state);
+}
+
+export function alive(pid: number | null | undefined): boolean {
+  if (pid === null || pid === undefined || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** The pid in the lock file if that process is alive. */
+export function lockHolder(p: Paths): number | null {
+  if (!existsSync(p.lock)) return null;
+  const pid = Number(readFileSync(p.lock, "utf8").trim());
+  return Number.isInteger(pid) && alive(pid) ? pid : null;
+}
+
+/** Takes the per-issue supervisor lock; returns the holder's pid when another live process has it. */
+export function acquireLock(p: Paths): number | null {
+  mkdirSync(p.dir, { recursive: true });
+  try {
+    writeFileSync(p.lock, `${process.pid}\n`, { flag: "wx" });
+    return null;
+  } catch {
+    // The lock file exists: honour it only while its process is alive.
+  }
+  const holder = lockHolder(p);
+  if (holder !== null && holder !== process.pid) return holder;
+  const tmp = `${p.lock}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${process.pid}\n`);
+  renameSync(tmp, p.lock);
+  return null;
+}

@@ -122,6 +122,12 @@ function vaguePhraseErrors(sections: readonly Section[], phrases: readonly strin
   return errors;
 }
 
+/** The trimmed text of the first section with `heading`, or undefined when the body has none. */
+export function sectionText(body: string, heading: string): string | undefined {
+  const section = splitSections(body).find((s) => s.heading === heading);
+  return section?.lines.map((line) => line.text).join("\n").trim();
+}
+
 /** Validates an issue body against the contract for `locale`. Pure: no I/O. */
 export function validateContract(body: string, locale: Locale, options: ContractOptions): ContractResult {
   const sections = splitSections(body);
