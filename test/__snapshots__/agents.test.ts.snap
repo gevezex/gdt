@@ -1,0 +1,52 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`AC-2: Claude Code adapter matches its verified invocation > builds the documented invocation 1`] = `
+{
+  "argv": [
+    "claude",
+    "-p",
+    "--model",
+    "claude-sonnet-5",
+    "--permission-mode",
+    "bypassPermissions",
+    "--no-session-persistence",
+  ],
+  "env": {},
+  "stdin": "/tmp/p.md",
+}
+`;
+
+exports[`AC-3: Codex adapter matches its verified invocation > builds the documented invocation 1`] = `
+{
+  "argv": [
+    "codex",
+    "exec",
+    "--model",
+    "gpt-5.6-luna",
+    "--cd",
+    "/work/repo",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--ephemeral",
+    "-",
+  ],
+  "env": {},
+  "stdin": "/tmp/p.md",
+}
+`;
+
+exports[`AC-4: OpenCode adapter matches its verified invocation > builds the documented invocation 1`] = `
+{
+  "argv": [
+    "opencode",
+    "run",
+    "--model",
+    "deepseek/deepseek-v4-flash",
+    "--auto",
+    "--file",
+    "/tmp/p.md",
+    "Follow the instructions in the attached file.",
+  ],
+  "env": {},
+  "stdin": null,
+}
+`;

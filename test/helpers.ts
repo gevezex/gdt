@@ -39,6 +39,8 @@ export interface FakeTools {
   ghAuthExit?: number;
   /** Body returned by `gh issue view <n> --json body`; without it that command fails. */
   issueBody?: string;
+  /** Agent CLIs to stub on PATH (default: claude, codex, opencode). */
+  agents?: string[];
 }
 
 /**
@@ -59,6 +61,10 @@ export function fakePath(tools: FakeTools = {}): string {
       `#!/bin/sh\nif [ "$1" = "issue" ] && [ "$2" = "view" ]; then ${issue}; fi\nexit ${tools.ghAuthExit ?? 0}\n`,
     );
     chmodSync(join(bin, "gh"), 0o755);
+  }
+  for (const agent of tools.agents ?? ["claude", "codex", "opencode"]) {
+    writeFileSync(join(bin, agent), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(bin, agent), 0o755);
   }
   return bin;
 }
