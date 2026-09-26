@@ -32,6 +32,8 @@ export interface Inflight {
   checks: number;
   /** Set when the handoff never became visible; the key stays blocked until a retry. */
   missing: boolean;
+  /** Set when the turn broke a role boundary; the key stays blocked until a retry. */
+  violation?: string;
 }
 
 /** `.git/gdt/issue-<n>/state.json`. Written only by the supervisor, or by the CLI when no supervisor runs. */
@@ -52,6 +54,8 @@ export interface State {
   dispatched: string[];
   inflight: Inflight | null;
   notified_status: Status | null;
+  /** Per role, the highest comment id seen at its previous dispatch; later directives are pending. */
+  directive_cursor?: Partial<Record<Role, number>>;
   pids: { supervisor: number | null; workers: Partial<Record<Role, number>> };
   updated_at: string;
 }

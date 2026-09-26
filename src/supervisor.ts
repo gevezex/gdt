@@ -8,6 +8,7 @@ import { type Decision, decide, type PullRequestSnapshot } from "./decision.js";
 import { comments, issueSnapshot, pullRequest, repository, viewer } from "./github.js";
 import { loadLocale, type Locale } from "./locale.js";
 import { notify } from "./notify.js";
+import { type Directive, pendingDirectives } from "./prompts.js";
 import { parseRecords, type ProtocolRecord } from "./protocol.js";
 import {
   acquireLock,
@@ -30,6 +31,8 @@ export interface TurnResult {
   /** Null when the turn was interrupted (for example by `gdt stop`). */
   exit_code: number | null;
   finished_at: string;
+  /** Set when a tester or reviewer turn changed tracked files, the branch or HEAD. */
+  violation?: string;
 }
 
 /** Written by the supervisor to instruct one worker to run one turn. */
@@ -43,6 +46,9 @@ export interface Dispatch {
   head: string | null;
   issue_body_sha256: string;
   acceptance_criteria: string[];
+  language: string;
+  /** Directives for this role posted since its previous dispatch. */
+  directives: Directive[];
   dispatched_at: string;
 }
 
@@ -158,6 +164,10 @@ class Supervisor {
     // A turn in flight: nothing to fetch until its worker has reported.
     const running = this.state.inflight;
     if (running !== null) {
+      if (running.violation !== undefined) {
+        this.setStatus("blocked", running.violation, { role: running.role, round: running.round });
+        return "continue";
+      }
       if (running.missing) {
         // Also restores the status after a stop and start.
         this.setStatus("blocked", `${running.role} finished without a visible handoff`, { role: running.role, round: running.round });
@@ -166,6 +176,12 @@ class Supervisor {
       const result = readJson<TurnResult>(this.p.result(running.key));
       if (result === null) {
         this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });
+        return "continue";
+      }
+      if (result.violation !== undefined) {
+        // A broken role boundary outranks the exit code: the checkout can no longer be trusted.
+        running.violation = result.violation;
+        this.setStatus("blocked", result.violation, { role: running.role, round: running.round, exit_code: result.exit_code });
         return "continue";
       }
       if (result.exit_code !== 0) {
@@ -241,6 +257,9 @@ class Supervisor {
       return "continue";
     }
 
+    const afterCommentId = Math.max(0, ...thread.map((c) => c.id));
+    const cursor = (this.state.directive_cursor ??= {});
+    const directives = pendingDirectives(records, this.trusted, decision.role, cursor[decision.role] ?? 0);
     const dispatch: Dispatch = {
       key,
       issue: this.issue,
@@ -251,18 +270,21 @@ class Supervisor {
       head: pr?.head ?? null,
       issue_body_sha256: bodySha,
       acceptance_criteria: contract.acceptance_criteria,
+      language: this.config.language,
+      directives,
       dispatched_at: now.toISOString(),
     };
     // Dispatch file first: if gdt stop lands in between, the restarted supervisor dispatches the same key
     // again, and the worker's exclusive "started" marker still runs it at most once.
     writeJsonAtomic(this.p.dispatch(decision.role), dispatch);
     this.state.dispatched.push(key);
+    cursor[decision.role] = afterCommentId;
     this.state.inflight = {
       key,
       role: decision.role,
       round: decision.round,
       dispatched_at: dispatch.dispatched_at,
-      after_comment_id: Math.max(0, ...thread.map((c) => c.id)),
+      after_comment_id: afterCommentId,
       checks: 0,
       missing: false,
     };

@@ -1,6 +1,7 @@
 # Everything the issue-contract validator must recognise in English issue bodies.
 
-# Top-level key: it must come before the first [table].
+# Top-level keys: they must come before the first [table].
+name = "English"
 vague_phrases = ["etc.", "and so on", "where needed", "as needed", "properly", "as usual",
   "in the right way", "robust", "user-friendly", "and the like"]
 

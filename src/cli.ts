@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig, ROLES, type Role } from "./config.js";
 import { validateContract } from "./contract.js";
@@ -50,10 +50,12 @@ Exits with 1 when any finding has level "error".
 `;
 
 const CHECK_ISSUE_HELP = `Usage: gdt check-issue <issue> [--json]
+       gdt check-issue --body-file <file> [--json]
 
-Fetches the body of the issue with "gh issue view" and validates it against the
-issue contract for the configured language (language in .gdt/config.toml,
-default en). Exits with 1 when the contract is invalid.
+Validates an issue body against the issue contract for the configured language
+(language in .gdt/config.toml, default en). With <issue>, the body is fetched
+with "gh issue view"; with --body-file, a local file is read and GitHub is not
+called. Exits with 1 when the contract is invalid.
 `;
 
 const WORKFLOW_HELP: Record<string, string> = {
@@ -111,17 +113,27 @@ function doctor(args: readonly string[], io: Io): number {
 function checkIssue(args: readonly string[], io: Io): number {
   let json = false;
   let issue: number | undefined;
-  for (const arg of args) {
+  let bodyFile: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
     if (arg === "--json") json = true;
     else if (arg === "--help" || arg === "-h") {
       io.stdout(CHECK_ISSUE_HELP);
       return EXIT_OK;
+    } else if (arg === "--body-file") {
+      bodyFile = args[++i];
+      if (bodyFile === undefined) return usageError(io, 'Missing file for "--body-file".', "gdt check-issue --help");
     } else if (arg.startsWith("-")) {
       return usageError(io, `Unknown option "${arg}" for "gdt check-issue".`, "gdt check-issue --help");
     } else if (issue === undefined && /^[1-9]\d*$/.test(arg)) issue = Number(arg);
     else return usageError(io, `Unexpected argument "${arg}" for "gdt check-issue".`, "gdt check-issue --help");
   }
-  if (issue === undefined) return usageError(io, 'Missing issue number for "gdt check-issue".', "gdt check-issue --help");
+  if (issue !== undefined && bodyFile !== undefined) {
+    return usageError(io, 'Give either an issue number or --body-file to "gdt check-issue", not both.', "gdt check-issue --help");
+  }
+  if (issue === undefined && bodyFile === undefined) {
+    return usageError(io, 'Missing issue number for "gdt check-issue".', "gdt check-issue --help");
+  }
 
   const root = findRepository(io.cwd) ?? io.cwd;
   let language = DEFAULT_LANGUAGE;
@@ -144,19 +156,31 @@ function checkIssue(args: readonly string[], io: Io): number {
     return EXIT_FAILED;
   }
 
-  const fetched = issueBody(issue, root, io.env);
-  if ("error" in fetched) {
-    io.stderr(`${fetched.error}\n`);
-    return EXIT_FAILED;
+  let body: string;
+  if (bodyFile !== undefined) {
+    try {
+      body = readFileSync(resolve(io.cwd, bodyFile), "utf8");
+    } catch (err) {
+      io.stderr(`Cannot read ${bodyFile}: ${err instanceof Error ? err.message : String(err)}\n`);
+      return EXIT_FAILED;
+    }
+  } else {
+    const fetched = issueBody(issue ?? 0, root, io.env);
+    if ("error" in fetched) {
+      io.stderr(`${fetched.error}\n`);
+      return EXIT_FAILED;
+    }
+    body = fetched.body;
   }
+  const label = bodyFile ?? `Issue #${issue}`;
 
-  const result = validateContract(fetched.body, locale, { maxAcceptanceCriteria });
+  const result = validateContract(body, locale, { maxAcceptanceCriteria });
   if (json) io.stdout(`${JSON.stringify(result, null, 2)}\n`);
   else if (result.valid) {
-    io.stdout(`Issue #${issue}: contract valid (${result.acceptance_criteria.length} acceptance criteria)\n`);
+    io.stdout(`${label}: contract valid (${result.acceptance_criteria.length} acceptance criteria)\n`);
   } else {
     const lines = result.errors.map((error) => `  - ${error}`);
-    io.stdout(`Issue #${issue}: contract invalid (${result.errors.length} error(s))\n${lines.join("\n")}\n`);
+    io.stdout(`${label}: contract invalid (${result.errors.length} error(s))\n${lines.join("\n")}\n`);
   }
   return result.valid ? EXIT_OK : EXIT_FAILED;
 }

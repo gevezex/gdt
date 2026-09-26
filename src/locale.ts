@@ -21,6 +21,8 @@ export type SectionKey = (typeof SECTION_KEYS)[number];
 const text = z.string().trim().min(1);
 
 export const localeSchema = z.strictObject({
+  /** English name of the language, used in role prompts. */
+  name: text,
   sections: z.strictObject(Object.fromEntries(SECTION_KEYS.map((key) => [key, text])) as Record<SectionKey, typeof text>),
   ac_fields: z.strictObject({ given: text, when: text, then: text, example: text }),
   markers: z.strictObject({ none: text }),
