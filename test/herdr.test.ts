@@ -58,8 +58,9 @@ describe("AC-2: start works from outside herdr", { timeout: 30_000 }, () => {
     const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
     const result = gdt(w, "start", "12");
     expect(result.code).toBe(0);
-    expect(result.stdout).toMatch(/Attach: herdr .*gdt-12/);
-    expect(Object.values(herdrWorkspaces(w)).some((workspace) => workspace.label === "gdt-12")).toBe(true);
+    const workspace = Object.values(herdrWorkspaces(w)).find((candidate) => candidate.label === "gdt-12");
+    expect(workspace).toBeDefined();
+    expect(result.stdout).toContain(`Attach: herdr workspace focus ${workspace?.workspace_id} && herdr (workspace gdt-12)\n`);
   });
 });
 
@@ -155,40 +156,46 @@ describe("AC-6: stop leaves an explanatory last line", { timeout: 30_000 }, () =
   });
 });
 
+/** A world whose PR #40 already has an approved handoff, test and review for HEAD, with green checks. */
+async function approvedWorld(terminal: "headless" | "herdr") {
+  const w = world({ terminal, developer: "/bin/sleep 60\n", pr: true });
+  const base = { repository: "gevezex/demo", issue: 12, round: 0, pr_number: 40, issue_body_sha256: sha256(BODY) };
+  const acResults = [
+    { ac: "AC-1", result: "passed", evidence: "fake" },
+    { ac: "AC-2", result: "passed", evidence: "fake" },
+  ];
+  const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
+  await editGithub(w, (data) => {
+    data.pulls = {
+      "40": { head: HEAD, mergeable: "MERGEABLE", checks: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] },
+    };
+    data.comments["40"] = [
+      {
+        id: 1,
+        author: "gevezex",
+        created_at: at(3),
+        body: record("handoff", { role: "developer", status: "ready", ...base, acceptance_criteria: ["AC-1", "AC-2"], ac_traceability: [], assumptions: [], deviations: [] }),
+      },
+      {
+        id: 2,
+        author: "gevezex",
+        created_at: at(2),
+        body: record("test", { role: "tester", status: "approved", ...base, acceptance_criteria: ["AC-1", "AC-2"], head: HEAD, ac_results: acResults, findings: [] }),
+      },
+      {
+        id: 3,
+        author: "gevezex",
+        created_at: at(1),
+        body: record("review", { role: "reviewer", status: "approved", ...base, acceptance_criteria: ["AC-1", "AC-2"], head: HEAD, ac_results: acResults, findings: [] }),
+      },
+    ];
+  });
+  return w;
+}
+
 describe("AC-7: completion is shown in every pane", { timeout: 30_000 }, () => {
   it("prints the completion line, exits every gdt process and titles the supervisor", async () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n", pr: true });
-    const base = { repository: "gevezex/demo", issue: 12, round: 0, pr_number: 40, issue_body_sha256: sha256(BODY) };
-    const acResults = [
-      { ac: "AC-1", result: "passed", evidence: "fake" },
-      { ac: "AC-2", result: "passed", evidence: "fake" },
-    ];
-    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
-    await editGithub(w, (data) => {
-      data.pulls = {
-        "40": { head: HEAD, mergeable: "MERGEABLE", checks: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] },
-      };
-      data.comments["40"] = [
-        {
-          id: 1,
-          author: "gevezex",
-          created_at: at(3),
-          body: record("handoff", { role: "developer", status: "ready", ...base, acceptance_criteria: ["AC-1", "AC-2"], ac_traceability: [], assumptions: [], deviations: [] }),
-        },
-        {
-          id: 2,
-          author: "gevezex",
-          created_at: at(2),
-          body: record("test", { role: "tester", status: "approved", ...base, acceptance_criteria: ["AC-1", "AC-2"], head: HEAD, ac_results: acResults, findings: [] }),
-        },
-        {
-          id: 3,
-          author: "gevezex",
-          created_at: at(1),
-          body: record("review", { role: "reviewer", status: "approved", ...base, acceptance_criteria: ["AC-1", "AC-2"], head: HEAD, ac_results: acResults, findings: [] }),
-        },
-      ];
-    });
+    const w = await approvedWorld("herdr");
 
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("ready_to_merge", () => stateOf(w).status === "ready_to_merge");
@@ -199,6 +206,19 @@ describe("AC-7: completion is shown in every pane", { timeout: 30_000 }, () => {
 
     const state = stateOf(w);
     await waitFor("every gdt process to exit", () => [state.pids.supervisor, ...Object.values(state.pids.workers)].every((pid) => !alive(pid)));
+  });
+});
+
+describe("headless mode keeps its workers after ready_to_merge", { timeout: 30_000 }, () => {
+  it("leaves the supervisor and every worker running", async () => {
+    const w = await approvedWorld("headless");
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await waitFor("ready_to_merge", () => stateOf(w).status === "ready_to_merge");
+    // Several worker polls (250 ms each) after the status change.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const state = stateOf(w);
+    expect(state.status).toBe("ready_to_merge");
+    for (const pid of [state.pids.supervisor, ...Object.values(state.pids.workers)]) expect(alive(pid)).toBe(true);
   });
 });
 

@@ -179,10 +179,13 @@ export async function work(root: string, issue: number, role: Role, env: Env): P
     process.exit(143);
   });
   log(`${role} worker ${process.pid} for #${issue} waiting`);
+  // In headless mode the workers keep waiting after ready_to_merge, as the supervisor does.
+  const { report } = loadConfig(root, env);
+  const herdr = report.valid && report.workflow.terminal === "herdr";
   for (;;) {
     const state = readState(p);
     // AC-7: the workflow is done; the final line explains that this pane can be closed.
-    if (state !== null && state.status === "ready_to_merge") {
+    if (herdr && state !== null && state.status === "ready_to_merge") {
       log(`${role} worker exiting (workflow ${state.status})`);
       process.stdout.write(`${completeLine(issue)}\n`);
       return 0;

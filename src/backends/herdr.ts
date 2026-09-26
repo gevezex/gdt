@@ -216,7 +216,8 @@ export function herdr(opts: HerdrOptions): Backend {
     alive: (handle) => alive(handle),
     attach: () => {
       const state = readPanes(opts.panesFile);
-      return state === null ? "herdr" : `herdr workspace focus ${state.workspace_id} (workspace gdt-${opts.issue})`;
+      // `workspace focus` only switches the server's focused workspace; plain `herdr` attaches the terminal.
+      return state === null ? "herdr" : `herdr workspace focus ${state.workspace_id} && herdr (workspace gdt-${opts.issue})`;
     },
     close(handle) {
       try {
