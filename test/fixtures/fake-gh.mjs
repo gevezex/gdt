@@ -1,0 +1,117 @@
+// A stand-in for `gh`, backed by one JSON file. Usage: node fake-gh.mjs <github.json> <gh args...>
+//
+// Test-only extra command, for fake agents:
+//   gh fake-record <issue-or-pr> <handoff|question> [--hidden-reads <n>]
+// posts a record built from the GDT_* variables the worker sets. A comment with hidden reads stays
+// invisible for that many reads of its thread, to model GitHub's delayed visibility.
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import process from "node:process";
+
+const [file, ...args] = process.argv.slice(2);
+
+function withLock(fn) {
+  const lock = `${file}.lock`;
+  for (let i = 0; ; i++) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      if (i > 2000) throw new Error("fake gh: lock timeout");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+    }
+  }
+  try {
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    const result = fn(data);
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(data, null, 2));
+    renameSync(tmp, file);
+    return result;
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+function out(value) {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+class Failure extends Error {}
+
+function fail(message) {
+  throw new Failure(message);
+}
+
+function record(kind, env, data) {
+  const base = {
+    repository: env.GDT_REPOSITORY,
+    issue: Number(env.GDT_ISSUE),
+    round: Number(env.GDT_ROUND),
+    pr_number: env.GDT_PR === "" ? null : Number(env.GDT_PR),
+    issue_body_sha256: env.GDT_ISSUE_BODY_SHA256,
+    acceptance_criteria: data.acceptance_criteria,
+  };
+  if (kind === "handoff") {
+    return { role: "developer", status: "ready", ...base, ac_traceability: [], assumptions: [], deviations: [] };
+  }
+  if (kind === "question") {
+    return { role: env.GDT_ROLE, ...base, question_id: "Q1", resume_role: env.GDT_ROLE, question: "EUR or USD?" };
+  }
+  fail(`fake gh: unknown record kind ${kind}`);
+}
+
+const [a, b] = args;
+const flag = (name) => {
+  const i = args.indexOf(name);
+  return i === -1 ? undefined : args[i + 1];
+};
+
+try {
+  withLock((data) => {
+  data.calls = [...(data.calls ?? []), args.join(" ")];
+  if (a === "auth" && b === "status") return;
+  if (a === "repo" && b === "view") return out({ nameWithOwner: data.repo });
+  if (a === "api" && b === "user") return out({ login: data.login });
+  if (a === "issue" && b === "view") {
+    const issue = data.issues[args[2]];
+    if (issue === undefined) fail("GraphQL: Could not resolve to an issue or pull request with the number of " + args[2]);
+    return out({ body: issue.body, closedByPullRequestsReferences: (issue.closed_by ?? []).map((number) => ({ number })) });
+  }
+  if (a === "pr" && b === "view") {
+    const pr = data.pulls[args[2]];
+    if (pr === undefined) fail(`no pull requests found for ${args[2]}`);
+    return out({ number: Number(args[2]), headRefOid: pr.head, mergeable: pr.mergeable ?? "MERGEABLE", statusCheckRollup: pr.checks ?? [] });
+  }
+  if (a === "api" && args.includes("--paginate")) {
+    const path = args.find((arg) => arg.startsWith("repos/"));
+    const number = /\/issues\/(\d+)\/comments$/.exec(path)?.[1];
+    const thread = (data.comments[number] ??= []);
+    const visible = [];
+    for (const comment of thread) {
+      if ((comment.hidden_reads ?? 0) > 0) comment.hidden_reads -= 1;
+      else visible.push({ id: comment.id, user: { login: comment.author }, created_at: comment.created_at, body: comment.body });
+    }
+    return out([visible]);
+  }
+  if (a === "fake-record") {
+    const kind = args[2];
+    const json = record(kind, process.env, data);
+    const marker = kind;
+    const thread = (data.comments[b] ??= []);
+    data.next_id = (data.next_id ?? 1000) + 1;
+    thread.push({
+      id: data.next_id,
+      author: flag("--author") ?? data.login,
+      created_at: new Date().toISOString(),
+      body: `[gdt-${marker}:v1]\n${JSON.stringify(json)}\n[/gdt-${marker}:v1]`,
+      hidden_reads: Number(flag("--hidden-reads") ?? 0),
+    });
+    return;
+  }
+  fail(`fake gh: unsupported command: ${args.join(" ")}`);
+  });
+} catch (err) {
+  if (!(err instanceof Failure)) throw err;
+  process.stderr.write(`${err.message}\n`);
+  process.exitCode = 1;
+}

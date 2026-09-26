@@ -2,12 +2,15 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig } from "./config.js";
+import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig, ROLES, type Role } from "./config.js";
 import { validateContract } from "./contract.js";
 import { findRepository, runDoctor } from "./doctor.js";
 import type { Finding } from "./finding.js";
 import { issueBody } from "./github.js";
 import { loadLocale } from "./locale.js";
+import { supervise } from "./supervisor.js";
+import { work } from "./worker.js";
+import { start, status, stop } from "./workflow.js";
 
 export interface Io {
   cwd: string;
@@ -29,6 +32,9 @@ Usage:
 Commands:
   doctor        Check tools, GitHub authentication and .gdt/config.toml
   check-issue   Validate an issue body against the issue contract
+  start         Start the workflow for an issue in the background
+  status        Show the workflow status and the next step
+  stop          Stop the workflow for an issue; start resumes it
 
 Options:
   --json        Machine-readable output
@@ -49,6 +55,23 @@ Fetches the body of the issue with "gh issue view" and validates it against the
 issue contract for the configured language (language in .gdt/config.toml,
 default en). Exits with 1 when the contract is invalid.
 `;
+
+const WORKFLOW_HELP: Record<string, string> = {
+  start: `Usage: gdt start <issue>
+
+Checks the working tree and the issue contract, starts the supervisor and the
+role workers as detached processes and returns. Logs: .git/gdt/issue-<n>/logs.
+`,
+  status: `Usage: gdt status <issue> [--json]
+
+Shows the workflow status and the next step.
+`,
+  stop: `Usage: gdt stop <issue>
+
+Stops the supervisor, the role workers and any running agent turn.
+"gdt start <issue>" resumes the same workflow.
+`,
+};
 
 export function version(): string {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
@@ -104,7 +127,7 @@ function checkIssue(args: readonly string[], io: Io): number {
   let language = DEFAULT_LANGUAGE;
   let maxAcceptanceCriteria = DEFAULT_MAX_ACCEPTANCE_CRITERIA;
   if (existsSync(join(root, CONFIG_PATH))) {
-    const { report } = loadConfig(root);
+    const { report } = loadConfig(root, io.env);
     if (!report.valid) {
       io.stderr(`${CONFIG_PATH} is invalid. Run "gdt doctor" for details.\n`);
       return EXIT_FAILED;
@@ -138,6 +161,48 @@ function checkIssue(args: readonly string[], io: Io): number {
   return result.valid ? EXIT_OK : EXIT_FAILED;
 }
 
+/** Parses `<issue> [--json]` for the workflow commands; returns an exit code on usage errors or help. */
+function issueArgs(command: string, args: readonly string[], io: Io, allowJson: boolean): { issue: number; json: boolean } | number {
+  let json = false;
+  let issue: number | undefined;
+  for (const arg of args) {
+    if (arg === "--json" && allowJson) json = true;
+    else if (arg === "--help" || arg === "-h") {
+      io.stdout(WORKFLOW_HELP[command] ?? HELP);
+      return EXIT_OK;
+    } else if (arg.startsWith("-")) {
+      return usageError(io, `Unknown option "${arg}" for "gdt ${command}".`, `gdt ${command} --help`);
+    } else if (issue === undefined && /^[1-9]\d*$/.test(arg)) issue = Number(arg);
+    else return usageError(io, `Unexpected argument "${arg}" for "gdt ${command}".`, `gdt ${command} --help`);
+  }
+  if (issue === undefined) return usageError(io, `Missing issue number for "gdt ${command}".`, `gdt ${command} --help`);
+  return { issue, json };
+}
+
+function workflowCommand(command: "start" | "status" | "stop", args: readonly string[], io: Io): number {
+  const parsed = issueArgs(command, args, io, command === "status");
+  if (typeof parsed === "number") return parsed;
+  const result =
+    command === "start"
+      ? start(parsed.issue, io.cwd, io.env)
+      : command === "stop"
+        ? stop(parsed.issue, io.cwd, io.env)
+        : status(parsed.issue, io.cwd, io.env, parsed.json);
+  if (result.stdout !== "") io.stdout(result.stdout);
+  if (result.stderr !== "") io.stderr(result.stderr);
+  return result.code;
+}
+
+/** Internal entry points started by the terminal backend; not part of the public CLI. */
+async function internal(command: string, args: readonly string[], io: Io): Promise<number> {
+  const issue = Number(args[0]);
+  const root = findRepository(io.cwd) ?? io.cwd;
+  if (command === "_supervise") return supervise(root, issue, io.env);
+  const role = args[1];
+  if (!ROLES.includes(role as Role)) return EXIT_USAGE;
+  return work(root, issue, role as Role, io.env);
+}
+
 export function run(argv: readonly string[], io: Io): number {
   const [command, ...rest] = argv;
   switch (command) {
@@ -154,6 +219,10 @@ export function run(argv: readonly string[], io: Io): number {
       return doctor(rest, io);
     case "check-issue":
       return checkIssue(rest, io);
+    case "start":
+    case "status":
+    case "stop":
+      return workflowCommand(command, rest, io);
     default:
       if (command.startsWith("-")) return usageError(io, `Unknown option "${command}".`, "gdt --help");
       return usageError(io, `Unknown command "${command}".`, "gdt --help");
@@ -171,10 +240,16 @@ function isEntryPoint(): boolean {
 }
 
 if (isEntryPoint()) {
-  process.exitCode = run(process.argv.slice(2), {
+  const io: Io = {
     cwd: process.cwd(),
     env: process.env,
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
-  });
+  };
+  const [command, ...rest] = process.argv.slice(2);
+  if (command === "_supervise" || command === "_worker") {
+    process.exitCode = await internal(command, rest, io);
+  } else {
+    process.exitCode = run(process.argv.slice(2), io);
+  }
 }

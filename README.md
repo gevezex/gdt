@@ -2,7 +2,7 @@
 
 **GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.**
 
-> Status: early development. Only `gdt doctor` and `gdt check-issue` exist; nothing is published to npm yet.
+> Status: early development. Only `gdt doctor`, `gdt check-issue` and a headless `gdt start`/`status`/`stop` exist; nothing is published to npm yet.
 > See [docs/design.md](docs/design.md).
 
 gdt runs one GitHub issue through three independent agent roles until a single

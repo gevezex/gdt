@@ -17,38 +17,66 @@ export const DEFAULT_MAX_ACCEPTANCE_CRITERIA = 8;
 export type Agent = (typeof AGENTS)[number];
 export type Role = (typeof ROLES)[number];
 
+/** The test agent: runs `script` instead of a coding agent. Only accepted when GDT_TEST_AGENTS=1. */
+export const TEST_AGENT = "fake";
+
 const roleSchema = z.strictObject({
   agent: z.enum(AGENTS),
   model: z.string().min(1),
 });
 
-export const configSchema = z.strictObject({
-  language: z.string().min(1).default(DEFAULT_LANGUAGE),
-  roles: z.strictObject({
-    developer: roleSchema,
-    tester: roleSchema,
-    reviewer: roleSchema,
-  }),
-  workflow: z.strictObject({
-    max_correction_rounds: z.int().min(0).default(2),
-    // Deliberately without a default: an empty gate must be an explicit choice.
-    required_checks: z.array(z.string().min(1)),
-    allow_no_required_checks: z.boolean().default(false),
-    terminal: z.enum(TERMINALS).default("herdr"),
-  }),
-  contract: z
-    .strictObject({
-      max_acceptance_criteria: z.int().min(1).default(DEFAULT_MAX_ACCEPTANCE_CRITERIA),
-      extra_rules: z.string().min(1).optional(),
-    })
-    .prefault({}),
-});
+const testRoleSchema = z
+  .strictObject({
+    agent: z.enum([...AGENTS, TEST_AGENT]),
+    model: z.string().min(1),
+    script: z.string().min(1).optional(),
+  })
+  .superRefine((role, ctx) => {
+    if (role.agent === TEST_AGENT && role.script === undefined) {
+      ctx.addIssue({ code: "custom", path: ["script"], message: `required for agent "${TEST_AGENT}"` });
+    }
+    if (role.agent !== TEST_AGENT && role.script !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["script"], message: `only allowed for agent "${TEST_AGENT}"` });
+    }
+  });
 
-export type Config = z.infer<typeof configSchema>;
+function configSchemaFor(testAgents: boolean) {
+  const role = testAgents ? testRoleSchema : roleSchema;
+  return z.strictObject({
+    language: z.string().min(1).default(DEFAULT_LANGUAGE),
+    roles: z.strictObject({ developer: role, tester: role, reviewer: role }),
+    workflow: z.strictObject({
+      max_correction_rounds: z.int().min(0).default(2),
+      // Deliberately without a default: an empty gate must be an explicit choice.
+      required_checks: z.array(z.string().min(1)),
+      allow_no_required_checks: z.boolean().default(false),
+      terminal: z.enum(TERMINALS).default("herdr"),
+      poll_seconds: z.number().positive().default(30),
+      handoff_checks: z.int().min(1).default(5),
+    }),
+    contract: z
+      .strictObject({
+        max_acceptance_criteria: z.int().min(1).default(DEFAULT_MAX_ACCEPTANCE_CRITERIA),
+        extra_rules: z.string().min(1).optional(),
+      })
+      .prefault({}),
+  });
+}
+
+export const configSchema = configSchemaFor(false);
+
+type Env = Record<string, string | undefined>;
+
+export function testAgentsEnabled(env: Env): boolean {
+  return env.GDT_TEST_AGENTS === "1";
+}
+
+export type Config = z.infer<ReturnType<typeof configSchemaFor>>;
 
 export interface ResolvedRole {
-  agent: Agent;
+  agent: Agent | typeof TEST_AGENT;
   model: string;
+  script?: string;
   /** The config file that last set a key of this role. */
   source: string;
 }
@@ -151,7 +179,7 @@ function readLayer(root: string, path: string): Layer | Finding {
 }
 
 /** Loads, merges and validates `.gdt/config.toml` and `.gdt/config.local.toml` in `root`. */
-export function loadConfig(root: string): { report: ConfigReport; findings: Finding[] } {
+export function loadConfig(root: string, env: Env = {}): { report: ConfigReport; findings: Finding[] } {
   const files = [CONFIG_PATH, LOCAL_CONFIG_PATH].filter((path) => existsSync(join(root, path)));
 
   if (!files.includes(CONFIG_PATH)) {
@@ -178,7 +206,7 @@ export function loadConfig(root: string): { report: ConfigReport; findings: Find
   if (findings.length > 0) return { report: { valid: false, files }, findings };
 
   const merged = layers.reduce<Table>((acc, layer) => merge(acc, layer.data), {});
-  const parsed = configSchema.safeParse(merged);
+  const parsed = configSchemaFor(testAgentsEnabled(env)).safeParse(merged);
   if (!parsed.success) {
     return {
       report: { valid: false, files },
