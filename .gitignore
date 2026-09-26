@@ -2,3 +2,4 @@ node_modules/
 dist/
 coverage/
 .gdt/config.local.toml
+schemas/
