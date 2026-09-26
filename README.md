@@ -2,7 +2,8 @@
 
 **GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.**
 
-> Status: design phase. Nothing is installable yet. See [docs/design.md](docs/design.md).
+> Status: early development. Only `gdt doctor` exists; nothing is published to npm yet.
+> See [docs/design.md](docs/design.md).
 
 gdt runs one GitHub issue through three independent agent roles until a single
 draft pull request is ready to merge, or until it needs your decision. A
@@ -32,6 +33,18 @@ Planned install:
 
 ```bash
 npm i -g @gevezex/gdt
+```
+
+## Development
+
+Requires Node 24 LTS.
+
+```bash
+npm ci
+npm run build
+npm run lint
+npm test
+node dist/cli.js doctor   # run inside a repository with .gdt/config.toml
 ```
 
 ## License
