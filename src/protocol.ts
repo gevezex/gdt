@@ -96,6 +96,11 @@ export function marker(kind: Kind, closing = false): string {
   return `[${closing ? "/" : ""}gdt-${kind}:v1]`;
 }
 
+/** The comment body carrying one record: opening marker, JSON object and closing marker. */
+export function formatRecord<K extends Kind>(kind: K, data: RecordData[K]): string {
+  return `${marker(kind)}\n${JSON.stringify(data, null, 2)}\n${marker(kind, true)}\n`;
+}
+
 const BLOCK = new RegExp(`\\[gdt-(${KINDS.join("|")}):v1\\]([\\s\\S]*?)\\[/gdt-\\1:v1\\]`, "g");
 
 /** Tolerates a Markdown code fence around the JSON object. */

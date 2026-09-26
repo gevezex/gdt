@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { headless } from "./backends/headless.js";
 import { loadConfig, type ResolvedConfig, type Role, ROLES } from "./config.js";
 import { sectionText, validateContract } from "./contract.js";
-import { type Decision, decide, type PullRequestSnapshot } from "./decision.js";
+import { type Decision, decide, openFindings, type PullRequestSnapshot } from "./decision.js";
 import { comments, issueSnapshot, pullRequest, repository, viewer } from "./github.js";
 import { loadLocale, type Locale } from "./locale.js";
 import { notify } from "./notify.js";
@@ -139,6 +139,11 @@ class Supervisor {
 
   /** One poll. Returns "exit" when the supervisor must stop. */
   tick(now: Date): "continue" | "exit" {
+    // `gdt pause` sets this file; `gdt resume` removes it. While it exists no turn is dispatched.
+    if (existsSync(this.p.pause)) {
+      this.setStatus("paused", "", { role: null });
+      return "continue";
+    }
     const { body, pullRequests } = issueSnapshot(this.issue, this.p.root, this.env);
     const bodySha = sha256(body);
     const changelog = sectionText(body, this.locale.sections.changelog) ?? "";
@@ -231,7 +236,7 @@ class Supervisor {
       this.state.inflight = null;
     }
 
-    const decision = decide({
+    const snapshot = {
       repository: this.state.repository,
       issue: this.issue,
       records,
@@ -241,7 +246,9 @@ class Supervisor {
       acceptance_criteria: contract.acceptance_criteria,
       head_transition_at: this.state.head_transition_at,
       config: this.config.workflow,
-    });
+    };
+    this.state.open_findings = openFindings(snapshot);
+    const decision = decide(snapshot);
 
     if (decision.action !== "dispatch") {
       this.setStatus(decision.action, decision.reason, { role: null });

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { relative } from "node:path";
 import { headless } from "./backends/headless.js";
 import { loadConfig, ROLES } from "./config.js";
@@ -8,7 +8,7 @@ import { findRepository } from "./doctor.js";
 import { changedFiles } from "./git.js";
 import { issueBody, repository } from "./github.js";
 import { loadLocale } from "./locale.js";
-import { alive, lockHolder, paths, readState, type State, writeState } from "./state.js";
+import { alive, lockHolder, type Paths, paths, readOverrides, readState, type State, type Status, writeState } from "./state.js";
 import { cliPath } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
@@ -19,8 +19,8 @@ export interface CommandResult {
   stderr: string;
 }
 
-const ok = (stdout: string): CommandResult => ({ code: 0, stdout, stderr: "" });
-const fail = (stderr: string): CommandResult => ({ code: 1, stdout: "", stderr });
+export const ok = (stdout: string): CommandResult => ({ code: 0, stdout, stderr: "" });
+export const fail = (stderr: string): CommandResult => ({ code: 1, stdout: "", stderr });
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -44,6 +44,7 @@ function newState(issue: number, repo: string): State {
     dispatched: [],
     inflight: null,
     notified_status: null,
+    open_findings: [],
     pids: { supervisor: null, workers: {} },
     updated_at: "",
   };
@@ -103,6 +104,14 @@ export function start(issue: number, cwd: string, env: Env): CommandResult {
   return ok(`Supervisor started for #${issue}; logs: ${logs}\nworkflow ${state.workflow_id}. Next: gdt status ${issue}\n`);
 }
 
+/** Stops the supervisor, its workers and any running agent, and releases the lock. */
+export function stopProcesses(p: Paths, state: State, env: Env): void {
+  const backend = headless(p.logs, p.root, env);
+  const pids = [lockHolder(p), state.pids.supervisor, ...ROLES.map((role) => state.pids.workers[role])];
+  for (const pid of new Set(pids)) if (pid !== null && pid !== undefined && alive(pid)) backend.close(pid);
+  rmSync(p.lock, { force: true });
+}
+
 /** `gdt stop <n>`: stops the supervisor, workers and running agents; `gdt start` resumes. */
 export function stop(issue: number, cwd: string, env: Env): CommandResult {
   const root = findRepository(cwd) ?? cwd;
@@ -110,10 +119,7 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
   const before = readState(p);
   if (before === null) return fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
 
-  const backend = headless(p.logs, root, env);
-  const pids = [lockHolder(p), before.pids.supervisor, ...ROLES.map((role) => before.pids.workers[role])];
-  for (const pid of new Set(pids)) if (pid !== null && pid !== undefined && alive(pid)) backend.close(pid);
-  rmSync(p.lock, { force: true });
+  stopProcesses(p, before, env);
 
   // Re-read: the supervisor may have written state until it was stopped.
   const state = readState(p) ?? before;
@@ -121,7 +127,42 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
   if (state.status === "failed") Object.assign(state, { pids: { supervisor: null, workers: {} } });
   else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
-  return ok(`Stopped #${issue}. Next: gdt start ${issue}\n`);
+  // The printed next step is exactly what `gdt status` reports after this command.
+  return ok(`Stopped #${issue}. Next: ${describe(state, false).next}\n`);
+}
+
+/** States from which `gdt retry` may clear the interrupted turn: a failed turn, or a blocked one that never produced a usable record. */
+function retryable(state: State): boolean {
+  if (state.status === "failed") return true;
+  return state.status === "blocked" && (state.reason.includes("without a visible handoff") || state.reason.includes("already ran"));
+}
+
+/** `gdt retry <n>`: stops the workflow and clears the interrupted turn so `gdt start` runs it again. */
+export function retry(issue: number, cwd: string, env: Env): CommandResult {
+  const root = findRepository(cwd) ?? cwd;
+  const p = paths(root, issue, env);
+  const state = readState(p);
+  if (state === null) return fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
+  if (!retryable(state)) {
+    return fail(`Workflow for #${issue} is not in a retryable state (status ${state.status}). Next: ${describe(state, lockHolder(p) !== null).next}\n`);
+  }
+
+  stopProcesses(p, state, env);
+  const key = state.inflight?.key;
+  if (key !== undefined) {
+    rmSync(p.started(key), { force: true });
+    rmSync(p.result(key), { force: true });
+    state.dispatched = state.dispatched.filter((known) => known !== key);
+  }
+  Object.assign(state, {
+    status: "stopped",
+    reason: "",
+    exit_code: null,
+    inflight: null,
+    pids: { supervisor: null, workers: {} },
+  });
+  writeState(p, state);
+  return ok(`Retry prepared for #${issue}. Next: ${describe(state, false).next}\n`);
 }
 
 function blockedHint(issue: number, reason: string): string {
@@ -134,6 +175,7 @@ function blockedHint(issue: number, reason: string): string {
 /** The one-line status and the next step. */
 export function describe(state: State, supervisorAlive: boolean): { line: string; next: string } {
   const n = state.issue;
+  if (state.status === "paused") return { line: "paused", next: `gdt resume ${n}` };
   const active = !["stopped", "failed"].includes(state.status);
   if (active && !supervisorAlive) return { line: `supervisor not running (last status: ${state.status})`, next: `gdt start ${n}` };
   const withReason = state.reason === "" ? state.status : `${state.status}: ${state.reason}`;
@@ -155,7 +197,7 @@ export function describe(state: State, supervisorAlive: boolean): { line: string
   }
 }
 
-/** `gdt status <n>`. */
+/** `gdt status <n>`. The pause file reports `paused` even before the supervisor notices it. */
 export function status(issue: number, cwd: string, env: Env, json: boolean): CommandResult {
   const root = findRepository(cwd) ?? cwd;
   const p = paths(root, issue, env);
@@ -165,17 +207,26 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
       ? { code: 1, stdout: `${JSON.stringify({ issue, status: null, next_step: `gdt start ${issue}` }, null, 2)}\n`, stderr: "" }
       : fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
   }
-  const { line, next } = describe(state, lockHolder(p) !== null);
+  const paused = existsSync(p.pause) && state.status !== "stopped" && state.status !== "failed";
+  const effective: State = paused ? { ...state, status: "paused" as Status, reason: "" } : state;
+  const { line, next } = describe(effective, lockHolder(p) !== null);
   if (!json) return ok(`${line}. Next: ${next}\n`);
+
+  let maxRounds: number | null = null;
+  const { report } = loadConfig(root, env);
+  if (report.valid) maxRounds = report.workflow.max_correction_rounds;
   const out = {
     issue,
     workflow_id: state.workflow_id,
-    status: state.status,
-    reason: state.reason,
+    status: effective.status,
+    reason: effective.reason,
     role: state.role,
     round: state.round,
+    max_rounds: maxRounds,
     exit_code: state.exit_code,
     pr_number: state.pr_number,
+    open_findings: state.open_findings ?? [],
+    overrides: readOverrides(p),
     next_step: next,
   };
   return ok(`${JSON.stringify(out, null, 2)}\n`);

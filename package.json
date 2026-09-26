@@ -16,7 +16,8 @@
     "dist",
     "locales",
     "roles",
-    "schemas"
+    "schemas",
+    "skill"
   ],
   "engines": {
     "node": ">=24"
