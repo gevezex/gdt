@@ -146,6 +146,15 @@ function evidence<K extends "test" | "review">(
   return latest(records, (r): r is Of<K> => r.kind === kind && (r.data as RecordData[K]).head === pr.head && time(r.created_at) > after);
 }
 
+/** Design 8: a verifier block counts only for the current head and after the latest head transition. */
+function staleVerifierBlock(snapshot: Snapshot, record: Verifier): boolean {
+  const pr = snapshot.pr;
+  // Without a current head there is nothing to lift the block against; keep it.
+  if (pr === null) return false;
+  const transition = snapshot.head_transition_at === null ? Number.NEGATIVE_INFINITY : time(snapshot.head_transition_at);
+  return record.data.head !== pr.head || time(record.created_at) <= transition;
+}
+
 /** A verifier record that is not an approval ends the chain here. */
 function verdict(snapshot: Snapshot, records: readonly ProtocolRecord[], record: Verifier, round: number): Decision | undefined {
   const role = ROLE_OF[record.kind];
@@ -186,7 +195,10 @@ export function decide(snapshot: Snapshot): Decision {
 
   const last = latest(records, isRoleRecord);
   if (last !== undefined && last.data.status === "blocked") {
-    return { action: "blocked", reason: `${ROLE_OF[last.kind]} reported blocked` };
+    // AC-1/AC-4: a new head lifts a tester or reviewer block without consuming a round.
+    // AC-2: for the same head the block stays. AC-3: a developer block always stays.
+    const lifted = last.kind !== "handoff" && staleVerifierBlock(snapshot, last);
+    if (!lifted) return { action: "blocked", reason: `${ROLE_OF[last.kind]} reported blocked` };
   }
   if (last !== undefined && last.data.status === "awaiting_human") {
     return { action: "awaiting_human", reason: `${ROLE_OF[last.kind]} is waiting for a human decision` };

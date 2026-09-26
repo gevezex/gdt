@@ -233,3 +233,57 @@ describe("contract changes", { timeout: 30_000 }, () => {
     await waitFor("a new developer dispatch", () => stateOf(w).dispatched.length === 2);
   });
 });
+
+describe("AC-1: a new head lifts a verifier block", { timeout: 30_000 }, () => {
+  const NEW_HEAD = "c".repeat(40);
+
+  it("dispatches the tester for the new head in the same round", async () => {
+    const seen = join(tmpdir(), `gdt-heads-${process.pid}-${Date.now()}`);
+    const tester = [
+      `if [ "$GDT_HEAD" = "${HEAD}" ]; then`,
+      "  gh fake-record 40 test --status blocked",
+      "else",
+      `  echo "$GDT_HEAD $GDT_ROUND" >> "${seen}"`,
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n");
+    const w = world({ developer: "gh fake-record 40 handoff\nexit 0\n", tester, pr: true, handoffChecks: 10_000 });
+    expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("tester blocked", () => stateOf(w).status === "blocked");
+    expect(stateOf(w).reason).toBe("tester reported blocked");
+
+    await editGithub(w, (data) => {
+      const pr = data.pulls?.["40"];
+      if (pr === undefined) throw new Error("test fixture: pull #40 is missing");
+      pr.head = NEW_HEAD;
+    });
+    await waitFor("the tester turn for the new head", () => lines(seen).length === 1);
+    expect(lines(seen)).toEqual([`${NEW_HEAD} 0`]);
+    const state = stateOf(w);
+    expect(state).toMatchObject({ status: "running", role: "tester", round: 0, head: NEW_HEAD });
+    expect(state.dispatched.some((key) => key.startsWith(`tester.r0.${NEW_HEAD}.`))).toBe(true);
+  });
+});
+
+describe("AC-2: the same head keeps the block", { timeout: 30_000 }, () => {
+  it("stays blocked with the same reason after a stop and start", async () => {
+    const w = world({
+      developer: "gh fake-record 40 handoff\nexit 0\n",
+      tester: "gh fake-record 40 test --status blocked\nexit 0\n",
+      pr: true,
+      handoffChecks: 5,
+    });
+    expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("tester blocked", () => stateOf(w).status === "blocked");
+    expect(stateOf(w).reason).toBe("tester reported blocked");
+
+    expect(gdt(w, "stop", "12")).toMatchObject({ code: 0, stdout: "Stopped #12. Next: gdt start 12\n" });
+    expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("blocked again", () => stateOf(w).status === "blocked");
+    expect(stateOf(w).reason).toBe("tester reported blocked");
+    expect(gdt(w, "status", "12").stdout).toBe(
+      "blocked: tester reported blocked. Next: resolve the cause; the supervisor checks again on every poll\n",
+    );
+  });
+});
