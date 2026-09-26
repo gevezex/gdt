@@ -14,13 +14,14 @@
   },
   "files": [
     "dist",
-    "locales"
+    "locales",
+    "schemas"
   ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/export-schemas.js",
     "lint": "eslint . && tsc --noEmit",
     "pretest": "npm run build",
     "test": "vitest run"
