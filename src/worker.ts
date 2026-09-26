@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { adapterFor, type Invocation } from "./agents/index.js";
@@ -29,6 +29,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }
 
+/** The turn's agent process, so a stop can end it with the worker. */
+let activeAgent: ChildProcess | null = null;
+
+/** AC-6: stops the running agent (and its own children) before the worker exits. */
+function killAgent(): void {
+  const child = activeAgent;
+  if (child === null || child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+export function stopLine(issue: number): string {
+  return `gdt stopped. Resume with: gdt start ${issue}`;
+}
+
+export function completeLine(issue: number): string {
+  return `Workflow complete: #${issue} is ready to merge. This pane can be closed.`;
+}
+
 /** A tester or reviewer must leave tracked files, the branch and HEAD as they were. */
 export function boundaryViolation(role: Role, before: Checkout, root: string, env: Env): string | undefined {
   if (role === "developer") return undefined;
@@ -53,17 +79,25 @@ export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<n
       done(66);
       return;
     }
-    // Same process group as the worker, so stopping the worker stops the agent too.
-    const child = spawn(command ?? "", args, { cwd, env: { ...env, ...inv.env }, stdio: [stdin, "inherit", "inherit"] });
+    // Its own process group, so a stop can end the agent and the children it started.
+    const child = spawn(command ?? "", args, {
+      cwd,
+      env: { ...env, ...inv.env },
+      stdio: [stdin, "inherit", "inherit"],
+      detached: true,
+    });
+    activeAgent = child;
     const close = () => {
       if (typeof stdin === "number") closeSync(stdin);
     };
     child.on("error", (err) => {
+      activeAgent = null;
       log(`agent could not start: ${err.message}`);
       close();
       done(127);
     });
     child.on("close", (code) => {
+      activeAgent = null;
       close();
       done(code);
     });
@@ -139,11 +173,25 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
 /** Waits for dispatches for `role` without a model and runs one agent turn per dispatch key. */
 export async function work(root: string, issue: number, role: Role, env: Env): Promise<number> {
   const p = paths(root, issue, env);
+  process.on("SIGTERM", () => {
+    killAgent();
+    process.stdout.write(`${stopLine(issue)}\n`);
+    process.exit(143);
+  });
   log(`${role} worker ${process.pid} for #${issue} waiting`);
   for (;;) {
     const state = readState(p);
+    // AC-7: the workflow is done; the final line explains that this pane can be closed.
+    if (state !== null && state.status === "ready_to_merge") {
+      log(`${role} worker exiting (workflow ${state.status})`);
+      process.stdout.write(`${completeLine(issue)}\n`);
+      return 0;
+    }
     if (state === null || state.status === "failed" || state.status === "stopped" || !alive(state.pids.supervisor)) {
       log(`${role} worker exiting (workflow ${state?.status ?? "missing"})`);
+      // AC-6: a worker that is alive when its workflow stops (or its supervisor disappears)
+      // explains how to resume. A failed turn keeps its error and prints nothing extra.
+      if (state !== null && state.status !== "failed") process.stdout.write(`${stopLine(issue)}\n`);
       return 0;
     }
     const dispatch = readJson<Dispatch>(p.dispatch(role));

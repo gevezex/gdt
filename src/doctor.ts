@@ -19,6 +19,65 @@ const TOOLS = [
   { name: "gh", fix: "Install GitHub CLI: https://cli.github.com" },
 ] as const;
 
+/** The oldest herdr this backend's workspace and pane commands were verified against (docs/agents.md). */
+export const MIN_HERDR_VERSION = "0.9.1";
+
+const HERDR_VERSION = /herdr (\d+)\.(\d+)\.(\d+)/;
+
+function versionAtLeast(found: string, minimum: string): boolean {
+  const a = found.split(".").map(Number);
+  const b = minimum.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const left = a[i] ?? 0;
+    const right = b[i] ?? 0;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+
+/** Reads the installed herdr version, or null when it is missing or unreadable. */
+function herdrVersion(env: Env): { path: string; version: string } | { path: string; error: string } | null {
+  const path = which("herdr", env);
+  if (path === null) return null;
+  const result = spawnSync(path, ["--version"], { env, encoding: "utf8" });
+  const text = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+  const match = HERDR_VERSION.exec(text);
+  if (result.status !== 0 || match === null) return { path, error: text };
+  return { path, version: `${match[1]}.${match[2]}.${match[3]}` };
+}
+
+/** Preflight for `gdt start`: the recovery line when herdr is unusable, or null when it is fine. */
+export function herdrPreflight(env: Env): string | null {
+  const found = herdrVersion(env);
+  if (found === null) return 'herdr not found on PATH; install herdr or set workflow.terminal = "headless"';
+  if ("error" in found) {
+    return `herdr did not report a version (${found.error || "no output"}); update herdr to ${MIN_HERDR_VERSION} or newer, or set workflow.terminal = "headless"`;
+  }
+  if (!versionAtLeast(found.version, MIN_HERDR_VERSION)) {
+    return `herdr ${found.version} is older than the minimum supported ${MIN_HERDR_VERSION}; update herdr or set workflow.terminal = "headless"`;
+  }
+  return null;
+}
+
+/** Checks that the configured herdr is present and at least `MIN_HERDR_VERSION`. */
+function herdrFinding(env: Env): Finding {
+  const found = herdrVersion(env);
+  const fix = 'Install or update herdr (https://herdr.dev), or set workflow.terminal = "headless"';
+  if (found === null) return { check: "herdr", level: "error", message: "herdr: not found on PATH", fix };
+  if ("error" in found) {
+    return { check: "herdr", level: "error", message: `herdr: could not read its version (${found.error || "no output"})`, fix };
+  }
+  if (!versionAtLeast(found.version, MIN_HERDR_VERSION)) {
+    return {
+      check: "herdr",
+      level: "error",
+      message: `herdr: ${found.version} is older than the minimum supported ${MIN_HERDR_VERSION}`,
+      fix,
+    };
+  }
+  return { check: "herdr", level: "ok", message: `herdr: ${found.version} at ${found.path}`, fix: "" };
+}
+
 /** Resolves `name` against `env.PATH` like a shell would, without running anything. */
 export function which(name: string, env: Env): string | null {
   const extensions = process.platform === "win32" ? ["", ...(env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";")] : [""];
@@ -158,7 +217,10 @@ export function runDoctor(cwd: string, env: Env): DoctorReport {
     findings.push(excludeFinding(root, tools.paths.get("git"), env));
   }
   findings.push(...configFindings);
-  if (report.valid) findings.push(...agentFindings(report, env));
+  if (report.valid) {
+    findings.push(...agentFindings(report, env));
+    if (report.workflow.terminal === "herdr") findings.push(herdrFinding(env));
+  }
 
   return { ok: !hasErrors(findings), repository: root, config: report, findings };
 }
