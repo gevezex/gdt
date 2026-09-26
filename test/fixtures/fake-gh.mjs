@@ -4,20 +4,45 @@
 //   gh fake-record <issue-or-pr> <handoff|question> [--hidden-reads <n>]
 // posts a record built from the GDT_* variables the worker sets. A comment with hidden reads stays
 // invisible for that many reads of its thread, to model GitHub's delayed visibility.
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import process from "node:process";
 
 const [file, ...args] = process.argv.slice(2);
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+// `gdt stop` kills process groups, so a holder can die inside the lock; its lock is then stale.
+function stale(lock) {
+  try {
+    return !alive(Number(readFileSync(`${lock}/pid`, "utf8")));
+  } catch {
+    // No pid yet: stale only if the holder died between mkdir and writing it.
+    try {
+      return Date.now() - statSync(lock).mtimeMs > 1000;
+    } catch {
+      return false;
+    }
+  }
+}
 
 function withLock(fn) {
   const lock = `${file}.lock`;
   for (let i = 0; ; i++) {
     try {
       mkdirSync(lock);
+      writeFileSync(`${lock}/pid`, String(process.pid));
       break;
     } catch {
       if (i > 2000) throw new Error("fake gh: lock timeout");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      if (stale(lock)) rmSync(lock, { recursive: true, force: true });
+      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
   try {
