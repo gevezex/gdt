@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { Role } from "./config.js";
+import type { Agent, Role } from "./config.js";
 
 type Env = Record<string, string | undefined>;
 
 export const STATUSES = [
   "starting",
   "running",
+  "paused",
   "awaiting_human",
   "waiting_for_checks",
   "ready_to_merge",
@@ -17,6 +18,12 @@ export const STATUSES = [
   "stopped",
 ] as const;
 export type Status = (typeof STATUSES)[number];
+
+/** A per-issue agent/model choice; takes precedence over the config role from the next turn. */
+export interface AgentOverride {
+  agent: Agent;
+  model: string;
+}
 
 /** Statuses that notify the user when the workflow enters them. */
 export const NOTIFY_STATUSES: readonly Status[] = ["awaiting_human", "blocked", "failed", "ready_to_merge"];
@@ -56,6 +63,8 @@ export interface State {
   notified_status: Status | null;
   /** Per role, the highest comment id seen at its previous dispatch; later directives are pending. */
   directive_cursor?: Partial<Record<Role, number>>;
+  /** Blocking finding ids of the tester/reviewer evidence for the current head. */
+  open_findings?: string[];
   pids: { supervisor: number | null; workers: Partial<Record<Role, number>> };
   updated_at: string;
 }
@@ -65,6 +74,10 @@ export interface Paths {
   dir: string;
   state: string;
   lock: string;
+  /** Existence means the workflow is paused; written by `gdt pause`, removed by `gdt resume`. */
+  pause: string;
+  /** Per-issue agent/model overrides written by `gdt set-agent`, kept out of `state.json`. */
+  overrides: string;
   logs: string;
   dispatch: (role: Role) => string;
   started: (key: string) => string;
@@ -86,6 +99,8 @@ export function paths(root: string, issue: number, env: Env): Paths {
     dir,
     state: join(dir, "state.json"),
     lock: join(dir, "supervisor.lock"),
+    pause: join(dir, "paused"),
+    overrides: join(dir, "overrides.json"),
     logs: join(dir, "logs"),
     dispatch: (role) => join(dir, "dispatch", `${role}.json`),
     started: (key) => join(dir, "runs", `${key}.started`),
@@ -113,6 +128,11 @@ export function readJson<T>(path: string): T | null {
 
 export function readState(p: Paths): State | null {
   return readJson<State>(p.state);
+}
+
+/** The per-issue agent/model overrides, empty when none are set. */
+export function readOverrides(p: Paths): Partial<Record<Role, AgentOverride>> {
+  return readJson<Partial<Record<Role, AgentOverride>>>(p.overrides) ?? {};
 }
 
 export function writeState(p: Paths, state: State, now: Date = new Date()): void {

@@ -12,3 +12,8 @@ export const ADAPTERS: Partial<Record<Agent, Adapter>> = { claude, codex, openco
 export function adapterFor(agent: string): Adapter | undefined {
   return ADAPTERS[agent as Agent];
 }
+
+/** The agents gdt can actually run right now, in a stable order. */
+export function supportedAgents(): Agent[] {
+  return Object.keys(ADAPTERS) as Agent[];
+}

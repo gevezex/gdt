@@ -36,6 +36,14 @@ function out(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function readStdin() {
+  try {
+    return readFileSync(0, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 class Failure extends Error {}
 
 function fail(message) {
@@ -57,6 +65,19 @@ function record(kind, env, data) {
   if (kind === "question") {
     return { role: env.GDT_ROLE, ...base, question_id: "Q1", resume_role: env.GDT_ROLE, question: "EUR or USD?" };
   }
+  if (kind === "test" || kind === "review") {
+    const role = kind === "test" ? "tester" : "reviewer";
+    const prefix = kind === "test" ? "T" : "R";
+    const status = flag("--status") ?? "approved";
+    return {
+      role,
+      status,
+      ...base,
+      head: env.GDT_HEAD,
+      ac_results: (data.acceptance_criteria ?? []).map((ac) => ({ ac, result: status === "approved" ? "passed" : "failed", evidence: "fake" })),
+      findings: status === "changes_requested" ? [{ id: `${prefix}-1`, blocking: true, summary: "fake finding" }] : [],
+    };
+  }
   fail(`fake gh: unknown record kind ${kind}`);
 }
 
@@ -76,6 +97,14 @@ try {
     const issue = data.issues[args[2]];
     if (issue === undefined) fail("GraphQL: Could not resolve to an issue or pull request with the number of " + args[2]);
     return out({ body: issue.body, closedByPullRequestsReferences: (issue.closed_by ?? []).map((number) => ({ number })) });
+  }
+  if ((a === "issue" || a === "pr") && b === "comment") {
+    // `gdt answer`, `gdt steer` and `gdt allow-round` post the body on stdin with --body-file -.
+    const body = readStdin();
+    const thread = (data.comments[args[2]] ??= []);
+    data.next_id = (data.next_id ?? 1000) + 1;
+    thread.push({ id: data.next_id, author: data.login, created_at: new Date().toISOString(), body });
+    return;
   }
   if (a === "pr" && b === "view") {
     const pr = data.pulls[args[2]];

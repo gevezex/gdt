@@ -27,6 +27,28 @@ function ghJson<T>(args: readonly string[], cwd: string, env: Env): T {
   }
 }
 
+/** Runs `gh args` with `input` on stdin; used to post a comment without putting its text in argv. */
+function ghInput(args: readonly string[], input: string, cwd: string, env: Env): string {
+  const bin = which("gh", env);
+  if (bin === null) throw new GhError("gh: not found on PATH. Install GitHub CLI: https://cli.github.com");
+  const result = spawnSync(bin, args, { cwd, env, encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024 });
+  if (result.status !== 0) {
+    const reason = (result.stderr ?? "").trim().split("\n")[0] || `gh exited with ${result.status ?? result.signal}`;
+    throw new GhError(reason);
+  }
+  return result.stdout;
+}
+
+/** Posts one comment on an issue; pull requests are issues too, but prefer `postPullRequestComment`. */
+export function postIssueComment(number: number, body: string, cwd: string, env: Env): void {
+  ghInput(["issue", "comment", String(number), "--body-file", "-"], body, cwd, env);
+}
+
+/** Posts one comment on a pull request conversation. */
+export function postPullRequestComment(number: number, body: string, cwd: string, env: Env): void {
+  ghInput(["pr", "comment", String(number), "--body-file", "-"], body, cwd, env);
+}
+
 /** Fetches the current body of issue `issue` in the repository `gh` resolves from `cwd`. */
 export function issueBody(issue: number, cwd: string, env: Env): { body: string } | { error: string } {
   try {

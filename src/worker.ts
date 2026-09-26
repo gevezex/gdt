@@ -5,7 +5,7 @@ import { adapterFor, type Invocation } from "./agents/index.js";
 import { loadConfig, type ResolvedRole, type Role, TEST_AGENT, testAgentsEnabled } from "./config.js";
 import { changedFiles, type Checkout, checkout } from "./git.js";
 import { buildPrompt } from "./prompts.js";
-import { alive, paths, readJson, readState, writeJsonAtomic } from "./state.js";
+import { alive, paths, readJson, readOverrides, readState, writeJsonAtomic } from "./state.js";
 import type { Dispatch, TurnResult } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
@@ -104,9 +104,13 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     return;
   }
 
+  // A `gdt set-agent` override wins over `.gdt/config.toml` for this role from this turn on.
+  const override = readOverrides(p)[role];
+  const roleConfig: ResolvedRole = override === undefined ? report.roles[role] : { ...report.roles[role], agent: override.agent, model: override.model };
+
   let inv: Invocation;
   try {
-    inv = invocation(role, report.roles[role], root, promptFile, env);
+    inv = invocation(role, roleConfig, root, promptFile, env);
   } catch (err) {
     log(err instanceof Error ? err.message : String(err));
     finish(127);

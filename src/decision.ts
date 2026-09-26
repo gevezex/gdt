@@ -161,6 +161,22 @@ function verdict(snapshot: Snapshot, records: readonly ProtocolRecord[], record:
   }
 }
 
+/** Ids of the blocking findings in the tester/reviewer evidence for the current head. */
+export function openFindings(snapshot: Snapshot): string[] {
+  const records = relevant(snapshot);
+  const pr = snapshot.pr;
+  if (pr === null) return [];
+  const handoff = latest(records, (r): r is Of<"handoff"> => r.kind === "handoff" && r.data.status === "ready");
+  if (handoff === undefined) return [];
+  const transition = snapshot.head_transition_at === null ? Number.NEGATIVE_INFINITY : time(snapshot.head_transition_at);
+  const after = Math.max(transition, time(handoff.created_at));
+  const test = evidence(records, "test", pr, after);
+  const review = evidence(records, "review", pr, Math.max(after, test === undefined ? after : time(test.created_at)));
+  return [test, review].flatMap((record) =>
+    record === undefined ? [] : record.data.findings.filter((f) => f.blocking).map((f) => f.id),
+  );
+}
+
 /** The pure decision engine: no I/O, no clock. */
 export function decide(snapshot: Snapshot): Decision {
   const records = relevant(snapshot);

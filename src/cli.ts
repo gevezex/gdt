@@ -8,9 +8,10 @@ import { findRepository, runDoctor } from "./doctor.js";
 import type { Finding } from "./finding.js";
 import { issueBody } from "./github.js";
 import { loadLocale } from "./locale.js";
+import { allowRound, answer, installSkill, pause, resume, setAgent, steer } from "./steering.js";
 import { supervise } from "./supervisor.js";
 import { work } from "./worker.js";
-import { start, status, stop } from "./workflow.js";
+import { type CommandResult, retry, start, status, stop } from "./workflow.js";
 
 export interface Io {
   cwd: string;
@@ -35,6 +36,14 @@ Commands:
   start         Start the workflow for an issue in the background
   status        Show the workflow status and the next step
   stop          Stop the workflow for an issue; start resumes it
+  retry         Prepare a controlled retry of the failed turn
+  answer        Answer an open question
+  steer         Send a directive to one role
+  pause         Stop dispatching new turns
+  resume        Continue dispatching after pause
+  allow-round   Grant one extra correction round
+  set-agent     Override the agent and model of one role
+  install-skill Install the operator skill into detected agent harnesses
 
 Options:
   --json        Machine-readable output
@@ -72,6 +81,46 @@ Shows the workflow status and the next step.
 
 Stops the supervisor, the role workers and any running agent turn.
 "gdt start <issue>" resumes the same workflow.
+`,
+  retry: `Usage: gdt retry <issue>
+
+Stops the failed or interrupted workflow and clears that turn so
+"gdt start <issue>" runs it again.
+`,
+  pause: `Usage: gdt pause <issue>
+
+Stops dispatching new turns; "gdt resume <issue>" continues.
+`,
+  resume: `Usage: gdt resume <issue>
+
+Continues dispatching after "gdt pause <issue>".
+`,
+  "allow-round": `Usage: gdt allow-round <issue>
+
+Grants one extra correction round when the round budget is exhausted.
+`,
+};
+
+const STEERING_HELP: Record<string, string> = {
+  answer: `Usage: gdt answer <issue> <question-id> <text>
+
+Posts a [gdt-answer:v1] comment for an open question. Exits 1 when the
+question is unknown or already answered.
+`,
+  steer: `Usage: gdt steer <issue> --role <role> <text>
+
+Posts a [gdt-directive:v1] comment for one role on the workflow pull request,
+or on the issue before a pull request exists. An unknown role exits 1.
+`,
+  "set-agent": `Usage: gdt set-agent <issue> <role> <agent>/<model>
+
+Overrides the configured agent and model for one role from its next turn;
+"gdt status --json" shows the override. An unsupported agent exits 1.
+`,
+  "install-skill": `Usage: gdt install-skill
+
+Copies skill/SKILL.md into the skill directory of every detected agent
+harness and lists the paths. Running it again reports "up to date".
 `,
 };
 
@@ -203,18 +252,100 @@ function issueArgs(command: string, args: readonly string[], io: Io, allowJson: 
   return { issue, json };
 }
 
-function workflowCommand(command: "start" | "status" | "stop", args: readonly string[], io: Io): number {
-  const parsed = issueArgs(command, args, io, command === "status");
-  if (typeof parsed === "number") return parsed;
-  const result =
-    command === "start"
-      ? start(parsed.issue, io.cwd, io.env)
-      : command === "stop"
-        ? stop(parsed.issue, io.cwd, io.env)
-        : status(parsed.issue, io.cwd, io.env, parsed.json);
+/** Writes a command result to the matching streams and returns its exit code. */
+function emit(result: CommandResult, io: Io): number {
   if (result.stdout !== "") io.stdout(result.stdout);
   if (result.stderr !== "") io.stderr(result.stderr);
   return result.code;
+}
+
+type WorkflowCommandName = "start" | "status" | "stop" | "retry" | "pause" | "resume" | "allow-round";
+
+function workflowCommand(command: WorkflowCommandName, args: readonly string[], io: Io): number {
+  const parsed = issueArgs(command, args, io, command === "status");
+  if (typeof parsed === "number") return parsed;
+  const { issue, json } = parsed;
+  const result =
+    command === "start"
+      ? start(issue, io.cwd, io.env)
+      : command === "stop"
+        ? stop(issue, io.cwd, io.env)
+        : command === "retry"
+          ? retry(issue, io.cwd, io.env)
+          : command === "pause"
+            ? pause(issue, io.cwd, io.env)
+            : command === "resume"
+              ? resume(issue, io.cwd, io.env)
+              : command === "allow-round"
+                ? allowRound(issue, io.cwd, io.env)
+                : status(issue, io.cwd, io.env, json);
+  return emit(result, io);
+}
+
+/** `gdt answer <issue> <question-id> <text>`; everything after the id is the answer text. */
+function answerCommand(args: readonly string[], io: Io): number {
+  if (args.includes("--help") || args.includes("-h")) {
+    io.stdout(STEERING_HELP.answer ?? HELP);
+    return EXIT_OK;
+  }
+  const [issueArg, questionId, ...rest] = args;
+  if (issueArg === undefined || questionId === undefined || rest.length === 0) {
+    return usageError(io, 'Usage: gdt answer <issue> <question-id> <text>.', "gdt answer --help");
+  }
+  if (!/^[1-9]\d*$/.test(issueArg)) return usageError(io, `Expected an issue number, got "${issueArg}".`, "gdt answer --help");
+  return emit(answer(Number(issueArg), questionId, rest.join(" "), io.cwd, io.env), io);
+}
+
+/** `gdt steer <issue> --role <role> <text>`. */
+function steerCommand(args: readonly string[], io: Io): number {
+  let issue: number | undefined;
+  let role: string | undefined;
+  const text: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--help" || arg === "-h") {
+      io.stdout(STEERING_HELP.steer ?? HELP);
+      return EXIT_OK;
+    } else if (arg === "--role") {
+      role = args[++i];
+      if (role === undefined) return usageError(io, 'Missing value for "--role".', "gdt steer --help");
+    } else if (arg.startsWith("-") && !/^-\d/.test(arg)) {
+      return usageError(io, `Unknown option "${arg}" for "gdt steer".`, "gdt steer --help");
+    } else if (issue === undefined && /^[1-9]\d*$/.test(arg)) {
+      issue = Number(arg);
+    } else {
+      text.push(arg);
+    }
+  }
+  if (issue === undefined) return usageError(io, 'Missing issue number for "gdt steer".', "gdt steer --help");
+  if (role === undefined) return usageError(io, 'Missing "--role <role>" for "gdt steer".', "gdt steer --help");
+  return emit(steer(issue, role, text.join(" "), io.cwd, io.env), io);
+}
+
+/** `gdt set-agent <issue> <role> <agent>/<model>`. */
+function setAgentCommand(args: readonly string[], io: Io): number {
+  if (args.includes("--help") || args.includes("-h")) {
+    io.stdout(STEERING_HELP["set-agent"] ?? HELP);
+    return EXIT_OK;
+  }
+  const [issueArg, role, spec, ...extra] = args;
+  if (issueArg === undefined || role === undefined || spec === undefined || extra.length > 0) {
+    return usageError(io, "Usage: gdt set-agent <issue> <role> <agent>/<model>.", "gdt set-agent --help");
+  }
+  if (!/^[1-9]\d*$/.test(issueArg)) return usageError(io, `Expected an issue number, got "${issueArg}".`, "gdt set-agent --help");
+  return emit(setAgent(Number(issueArg), role, spec, io.cwd, io.env), io);
+}
+
+/** `gdt install-skill`. */
+function installSkillCommand(args: readonly string[], io: Io): number {
+  for (const arg of args) {
+    if (arg === "--help" || arg === "-h") {
+      io.stdout(STEERING_HELP["install-skill"] ?? HELP);
+      return EXIT_OK;
+    }
+    return usageError(io, `Unexpected argument "${arg}" for "gdt install-skill".`, "gdt install-skill --help");
+  }
+  return emit(installSkill(io.env), io);
 }
 
 /** Internal entry points started by the terminal backend; not part of the public CLI. */
@@ -246,7 +377,19 @@ export function run(argv: readonly string[], io: Io): number {
     case "start":
     case "status":
     case "stop":
+    case "retry":
+    case "pause":
+    case "resume":
+    case "allow-round":
       return workflowCommand(command, rest, io);
+    case "answer":
+      return answerCommand(rest, io);
+    case "steer":
+      return steerCommand(rest, io);
+    case "set-agent":
+      return setAgentCommand(rest, io);
+    case "install-skill":
+      return installSkillCommand(rest, io);
     default:
       if (command.startsWith("-")) return usageError(io, `Unknown option "${command}".`, "gdt --help");
       return usageError(io, `Unknown command "${command}".`, "gdt --help");
