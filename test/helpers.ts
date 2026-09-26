@@ -33,12 +33,31 @@ const found = which("git", process.env);
 if (found === null) throw new Error("tests need git on PATH");
 const realGit: string = found;
 
-/** A PATH containing only the requested tools; `gh` is a stub whose `auth status` exits with `ghAuthExit`. */
-export function fakePath(tools: { git?: boolean; gh?: boolean; ghAuthExit?: number } = {}): string {
+export interface FakeTools {
+  git?: boolean;
+  gh?: boolean;
+  ghAuthExit?: number;
+  /** Body returned by `gh issue view <n> --json body`; without it that command fails. */
+  issueBody?: string;
+}
+
+/**
+ * A PATH containing only the requested tools. `gh` is a stub: `issue view` prints `issueBody` as JSON
+ * (and logs its arguments to `gh-args` in the bin directory); anything else exits with `ghAuthExit`.
+ */
+export function fakePath(tools: FakeTools = {}): string {
   const bin = mkdtempSync(join(tmpdir(), "gdt-bin-"));
   if (tools.git ?? true) symlinkSync(realGit, join(bin, "git"));
   if (tools.gh ?? true) {
-    writeFileSync(join(bin, "gh"), `#!/bin/sh\nexit ${tools.ghAuthExit ?? 0}\n`);
+    const issue =
+      tools.issueBody === undefined
+        ? `echo "GraphQL: Could not resolve to an issue" >&2; exit 1`
+        : `echo "$@" > "${join(bin, "gh-args")}"; /bin/cat "${join(bin, "issue.json")}"; exit 0`;
+    if (tools.issueBody !== undefined) writeFileSync(join(bin, "issue.json"), JSON.stringify({ body: tools.issueBody }));
+    writeFileSync(
+      join(bin, "gh"),
+      `#!/bin/sh\nif [ "$1" = "issue" ] && [ "$2" = "view" ]; then ${issue}; fi\nexit ${tools.ghAuthExit ?? 0}\n`,
+    );
     chmodSync(join(bin, "gh"), 0o755);
   }
   return bin;

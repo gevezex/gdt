@@ -13,7 +13,8 @@
     "gdt": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "locales"
   ],
   "engines": {
     "node": ">=24"

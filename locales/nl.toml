@@ -1,0 +1,27 @@
+# Everything the issue-contract validator must recognise in Dutch issue bodies.
+
+# Top-level key: it must come before the first [table].
+vague_phrases = ["etc.", "enzovoort", "waar nodig", "netjes", "zoals gebruikelijk",
+  "op de juiste manier", "robuust", "gebruiksvriendelijk", "en dergelijke"]
+
+[sections]
+plain_language = "In gewone taal"
+goal = "Doel"
+context = "Context"
+definitions = "Definities"
+acceptance_criteria = "Acceptatiecriteria"
+non_functional = "Niet-functioneel"
+out_of_scope = "Buiten scope"
+assumptions = "Aannames"
+open_questions = "Open vragen"
+changelog = "Changelog"
+readiness = "Readiness"
+
+[ac_fields]
+given = "Gegeven"
+when = "Wanneer"
+then = "Dan"
+example = "Voorbeeld"
+
+[markers]
+none = "Geen."

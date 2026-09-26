@@ -1,0 +1,27 @@
+# Everything the issue-contract validator must recognise in English issue bodies.
+
+# Top-level key: it must come before the first [table].
+vague_phrases = ["etc.", "and so on", "where needed", "as needed", "properly", "as usual",
+  "in the right way", "robust", "user-friendly", "and the like"]
+
+[sections]
+plain_language = "Plain language"
+goal = "Goal"
+context = "Context"
+definitions = "Definitions"
+acceptance_criteria = "Acceptance criteria"
+non_functional = "Non-functional"
+out_of_scope = "Out of scope"
+assumptions = "Assumptions"
+open_questions = "Open questions"
+changelog = "Changelog"
+readiness = "Readiness"
+
+[ac_fields]
+given = "Given"
+when = "When"
+then = "Then"
+example = "Example"
+
+[markers]
+none = "None."

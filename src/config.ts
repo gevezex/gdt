@@ -11,6 +11,9 @@ export const TERMINALS = ["herdr", "headless"] as const;
 export const CONFIG_PATH = ".gdt/config.toml";
 export const LOCAL_CONFIG_PATH = ".gdt/config.local.toml";
 
+export const DEFAULT_LANGUAGE = "en";
+export const DEFAULT_MAX_ACCEPTANCE_CRITERIA = 8;
+
 export type Agent = (typeof AGENTS)[number];
 export type Role = (typeof ROLES)[number];
 
@@ -20,7 +23,7 @@ const roleSchema = z.strictObject({
 });
 
 export const configSchema = z.strictObject({
-  language: z.string().min(1).default("en"),
+  language: z.string().min(1).default(DEFAULT_LANGUAGE),
   roles: z.strictObject({
     developer: roleSchema,
     tester: roleSchema,
@@ -35,7 +38,7 @@ export const configSchema = z.strictObject({
   }),
   contract: z
     .strictObject({
-      max_acceptance_criteria: z.int().min(1).default(8),
+      max_acceptance_criteria: z.int().min(1).default(DEFAULT_MAX_ACCEPTANCE_CRITERIA),
       extra_rules: z.string().min(1).optional(),
     })
     .prefault({}),
