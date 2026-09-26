@@ -1,3 +1,14 @@
+# Terminal backends
+
+`workflow.terminal` selects how the supervisor and the three role workers are run. `headless` uses
+detached processes with one log file per pane under `.git/gdt/issue-<n>/logs`. `herdr` runs them in
+four panes of one herdr workspace named `gdt-<issue>` (design 9.6); pane titles are
+`<role> · <agent> · <STATE>` and `supervisor · <status>`.
+
+The minimum supported herdr version is **0.9.1**, the version the workspace, pane and title commands
+this backend uses were verified against. `gdt doctor` reports an error when herdr is missing, cannot
+report its version, or is older than that minimum.
+
 # Agent adapters
 
 Each role turn runs one agent CLI unattended. An adapter in `src/agents/` builds the command. It also

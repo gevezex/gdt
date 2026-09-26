@@ -2,19 +2,9 @@ import { spawn } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { alive } from "../state.js";
+import type { Backend } from "./backend.js";
 
 type Env = Record<string, string | undefined>;
-
-/** Terminal backend interface (design 9.6). */
-export interface Backend {
-  ensureWorkspace(): void;
-  /** Starts `argv` as a pane named `name` that outlives the caller; returns its pid. */
-  spawnPane(name: string, argv: readonly string[]): number;
-  setTitle(pid: number, title: string): void;
-  alive(pid: number): boolean;
-  /** Stops the pane's whole process group, including agent processes it started. */
-  close(pid: number): void;
-}
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -50,6 +40,7 @@ export function headless(logs: string, cwd: string, env: Env): Backend {
       // Headless panes have no title.
     },
     alive: (pid) => alive(pid),
+    attach: () => null,
     close(pid) {
       killGroup(pid, "SIGTERM");
       for (let waited = 0; waited < 5000 && alive(pid); waited += 50) sleepSync(50);

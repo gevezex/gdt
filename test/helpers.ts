@@ -2,8 +2,20 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { run } from "../src/cli.js";
 import { which } from "../src/doctor.js";
+
+const FAKE_HERDR = fileURLToPath(new URL("./fixtures/fake-herdr.mjs", import.meta.url));
+
+/** Writes a `herdr` stand-in into `bin`, backed by the shared fixture. */
+export function fakeHerdr(bin: string, version = "0.9.1"): void {
+  writeFileSync(
+    join(bin, "herdr"),
+    `#!/bin/sh\nFAKE_HERDR_DIR="\${0%/*}" FAKE_HERDR_VERSION="${version}" exec "${process.execPath}" "${FAKE_HERDR}" "$@"\n`,
+  );
+  chmodSync(join(bin, "herdr"), 0o755);
+}
 
 export const EXAMPLE_CONFIG = `language = "nl"                 # language for human-facing GitHub text
 
@@ -41,6 +53,10 @@ export interface FakeTools {
   issueBody?: string;
   /** Agent CLIs to stub on PATH (default: claude, codex, opencode). */
   agents?: string[];
+  /** Install a herdr stand-in (default true); set false to test the missing-herdr path. */
+  herdr?: boolean;
+  /** Version the herdr stand-in reports. */
+  herdrVersion?: string;
 }
 
 /**
@@ -66,6 +82,7 @@ export function fakePath(tools: FakeTools = {}): string {
     writeFileSync(join(bin, agent), "#!/bin/sh\nexit 0\n");
     chmodSync(join(bin, agent), 0o755);
   }
+  if (tools.herdr ?? true) fakeHerdr(bin, tools.herdrVersion);
   return bin;
 }
 

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { headless } from "./backends/headless.js";
+import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, type ResolvedConfig, type Role, ROLES } from "./config.js";
 import { sectionText, validateContract } from "./contract.js";
 import { type Decision, decide, openFindings, type PullRequestSnapshot } from "./decision.js";
@@ -92,6 +92,7 @@ function log(line: string): void {
 
 class Supervisor {
   private trusted: string[] = [];
+  private readonly agents: Record<Role, string>;
 
   constructor(
     private readonly p: Paths,
@@ -100,16 +101,25 @@ class Supervisor {
     private readonly locale: Locale,
     private readonly env: Env,
     private state: State,
-  ) {}
+    private readonly backend: Backend,
+  ) {
+    this.agents = Object.fromEntries(ROLES.map((role) => [role, config.roles[role].agent])) as Record<Role, string>;
+  }
 
   private save(): void {
     writeState(this.p, this.state);
+  }
+
+  /** AC-5: the title of a role pane, for example `developer · opencode · RUNNING`. */
+  private roleTitle(role: Role, state: string): string {
+    return `${role} · ${this.agents[role]} · ${state}`;
   }
 
   /** Records a status; notifies once when entering a notifying status. */
   private setStatus(status: Status, reason: string, extra: Partial<State> = {}): void {
     if (this.state.status !== status || this.state.reason !== reason) log(`status ${status}${reason === "" ? "" : `: ${reason}`}`);
     Object.assign(this.state, { status, reason }, extra);
+    this.backend.setTitle("supervisor", `supervisor · ${status}`);
     if (NOTIFY_STATUSES.includes(status)) {
       if (this.state.notified_status !== status) {
         const used = notify(`gdt #${this.issue}: ${status}`, reason === "" ? status : reason, this.env, log);
@@ -123,11 +133,12 @@ class Supervisor {
   }
 
   startWorkers(): void {
-    const backend = headless(this.p.logs, this.p.root, this.env);
-    backend.ensureWorkspace();
+    this.backend.ensureWorkspace();
+    this.backend.setTitle("supervisor", "supervisor · starting");
     for (const role of ROLES) {
-      if (backend.alive(this.state.pids.workers[role] ?? -1)) continue;
-      this.state.pids.workers[role] = backend.spawnPane(role, [process.execPath, cliPath(), "_worker", String(this.issue), role]);
+      this.backend.setTitle(role, this.roleTitle(role, "WAITING"));
+      if (this.backend.alive(this.state.pids.workers[role] ?? -1)) continue;
+      this.state.pids.workers[role] = this.backend.spawnPane(role, [process.execPath, cliPath(), "_worker", String(this.issue), role]);
     }
     this.save();
   }
@@ -170,6 +181,7 @@ class Supervisor {
     const running = this.state.inflight;
     if (running !== null) {
       if (running.violation !== undefined) {
+        this.backend.setTitle(running.role, this.roleTitle(running.role, "FAILED"));
         this.setStatus("blocked", running.violation, { role: running.role, round: running.round });
         return "continue";
       }
@@ -186,6 +198,7 @@ class Supervisor {
       if (result.violation !== undefined) {
         // A broken role boundary outranks the exit code: the checkout can no longer be trusted.
         running.violation = result.violation;
+        this.backend.setTitle(running.role, this.roleTitle(running.role, "FAILED"));
         this.setStatus("blocked", result.violation, { role: running.role, round: running.round, exit_code: result.exit_code });
         return "continue";
       }
@@ -194,9 +207,12 @@ class Supervisor {
           result.exit_code === null
             ? `${running.role} turn was interrupted`
             : `${running.role} turn failed (exit code ${result.exit_code})`;
+        this.backend.setTitle(running.role, this.roleTitle(running.role, "FAILED"));
         this.setStatus("failed", reason, { role: running.role, round: running.round, exit_code: result.exit_code });
         return "exit";
       }
+      // AC-5: the turn finished successfully.
+      this.backend.setTitle(running.role, this.roleTitle(running.role, "DONE"));
     }
 
     if (pullRequests.length > 1) {
@@ -252,6 +268,9 @@ class Supervisor {
 
     if (decision.action !== "dispatch") {
       this.setStatus(decision.action, decision.reason, { role: null });
+      // AC-7: on completion the workers exit on their own when they see `ready_to_merge`; in herdr
+      // mode the supervisor exits too, after printing the completion line as its final output.
+      if (decision.action === "ready_to_merge" && this.config.workflow.terminal === "herdr") return "exit";
       return "continue";
     }
 
@@ -295,6 +314,7 @@ class Supervisor {
       checks: 0,
       missing: false,
     };
+    this.backend.setTitle(decision.role, this.roleTitle(decision.role, "RUNNING"));
     this.setStatus("running", `dispatched ${decision.role}: ${decision.reason}`, { role: decision.role, round: decision.round, exit_code: null });
     log(`dispatched ${key}`);
     return "continue";
@@ -311,6 +331,8 @@ export async function supervise(root: string, issue: number, env: Env): Promise<
   }
   const release = () => rmSync(p.lock, { force: true });
   process.on("SIGTERM", () => {
+    // AC-6: the pane's last output line explains how to resume.
+    process.stdout.write(`gdt stopped. Resume with: gdt start ${issue}\n`);
     release();
     process.exit(143);
   });
@@ -325,7 +347,8 @@ export async function supervise(root: string, issue: number, env: Env): Promise<
 
   state.pids.supervisor = process.pid;
   writeState(p, state);
-  const supervisor = new Supervisor(p, issue, report, loadLocale(report.language), env, state);
+  const backend = backendFor(report, root, issue, env, p);
+  const supervisor = new Supervisor(p, issue, report, loadLocale(report.language), env, state, backend);
   log(`supervisor ${process.pid} for #${issue}, workflow ${state.workflow_id}`);
   try {
     supervisor.init();
@@ -345,7 +368,12 @@ export async function supervise(root: string, issue: number, env: Env): Promise<
     }
     await sleep(report.workflow.poll_seconds * 1000);
   }
-  log("supervisor exiting");
+  // AC-7: the completion line is the pane's final output, so it is written after the last log line.
+  if (report.workflow.terminal === "herdr" && readState(p)?.status === "ready_to_merge") {
+    process.stdout.write(`Workflow complete: #${issue} is ready to merge. This pane can be closed.\n`);
+  } else {
+    log("supervisor exiting");
+  }
   release();
   return 0;
 }

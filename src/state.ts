@@ -79,6 +79,10 @@ export interface Paths {
   /** Per-issue agent/model overrides written by `gdt set-agent`, kept out of `state.json`. */
   overrides: string;
   logs: string;
+  /** `.git/gdt/issue-<n>/panes.json`: the terminal backend's panes, when it has any. */
+  panes: string;
+  /** `.git/gdt/issue-<n>/pids`: one file per pane holding its gdt process id. */
+  pids: string;
   dispatch: (role: Role) => string;
   started: (key: string) => string;
   result: (key: string) => string;
@@ -102,6 +106,8 @@ export function paths(root: string, issue: number, env: Env): Paths {
     pause: join(dir, "paused"),
     overrides: join(dir, "overrides.json"),
     logs: join(dir, "logs"),
+    panes: join(dir, "panes.json"),
+    pids: join(dir, "pids"),
     dispatch: (role) => join(dir, "dispatch", `${role}.json`),
     started: (key) => join(dir, "runs", `${key}.started`),
     result: (key) => join(dir, "runs", `${key}.result.json`),

@@ -2,9 +2,10 @@ import { randomBytes } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { relative } from "node:path";
 import { headless } from "./backends/headless.js";
+import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, ROLES } from "./config.js";
 import { validateContract } from "./contract.js";
-import { findRepository } from "./doctor.js";
+import { findRepository, herdrPreflight } from "./doctor.js";
 import { changedFiles } from "./git.js";
 import { issueBody, repository } from "./github.js";
 import { loadLocale } from "./locale.js";
@@ -56,8 +57,9 @@ export function start(issue: number, cwd: string, env: Env): CommandResult {
   if (root === null) return fail(`${cwd} is not inside a Git repository. Run gdt from a checkout of the target repository.\n`);
   const { report } = loadConfig(root, env);
   if (!report.valid) return fail('.gdt/config.toml is invalid. Run "gdt doctor" for details.\n');
-  if (report.workflow.terminal !== "headless") {
-    return fail(`workflow.terminal = "${report.workflow.terminal}" is not available yet. Set workflow.terminal = "headless".\n`);
+  if (report.workflow.terminal === "herdr") {
+    const problem = herdrPreflight(env);
+    if (problem !== null) return fail(`${problem}\n`);
   }
 
   const p = paths(root, issue, env);
@@ -94,22 +96,49 @@ export function start(issue: number, cwd: string, env: Env): CommandResult {
   Object.assign(state, { status: "starting", reason: existing === null ? "" : "resuming", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
 
-  const backend = headless(p.logs, root, env);
-  backend.ensureWorkspace();
-  const pid = backend.spawnPane("supervisor", [process.execPath, cliPath(), "_supervise", String(issue)]);
+  let backend: Backend;
+  let pid: number;
+  try {
+    backend = backendFor(report, root, issue, env, p);
+    backend.ensureWorkspace();
+    pid = backend.spawnPane("supervisor", [process.execPath, cliPath(), "_supervise", String(issue)]);
+  } catch (err) {
+    return fail(`Could not start the supervisor for #${issue}: ${err instanceof Error ? err.message : String(err)}. Run "gdt doctor".\n`);
+  }
   const running = () => lockHolder(p) === pid && readState(p)?.pids.supervisor === pid;
   for (let waited = 0; waited < 4000 && !running() && alive(pid); waited += 50) sleepSync(50);
   const logs = relative(root, p.logs) || p.logs;
   if (!running()) return fail(`Supervisor for #${issue} exited during startup; see ${logs}/supervisor.log\n`);
-  return ok(`Supervisor started for #${issue}; logs: ${logs}\nworkflow ${state.workflow_id}. Next: gdt status ${issue}\n`);
+  const attach = backend.attach();
+  const attachLine = attach === null ? "" : `Attach: ${attach}\n`;
+  return ok(`Supervisor started for #${issue}; logs: ${logs}\n${attachLine}workflow ${state.workflow_id}. Next: gdt status ${issue}\n`);
+}
+
+/** The workflow's terminal backend; falls back to the headless one when the config is unreadable. */
+function loadBackend(p: Paths, issue: number, env: Env): Backend {
+  const { report } = loadConfig(p.root, env);
+  return report.valid ? backendFor(report, p.root, issue, env, p) : headless(p.logs, p.root, env);
 }
 
 /** Stops the supervisor, its workers and any running agent, and releases the lock. */
 export function stopProcesses(p: Paths, state: State, env: Env): void {
-  const backend = headless(p.logs, p.root, env);
+  const backend = loadBackend(p, state.issue, env);
   const pids = [lockHolder(p), state.pids.supervisor, ...ROLES.map((role) => state.pids.workers[role])];
   for (const pid of new Set(pids)) if (pid !== null && pid !== undefined && alive(pid)) backend.close(pid);
   rmSync(p.lock, { force: true });
+}
+
+/** AC-6: after stopping, every herdr pane shows STOPPED; the gdt processes printed the last line. */
+function markStopped(p: Paths, issue: number, env: Env): void {
+  const { report } = loadConfig(p.root, env);
+  if (!report.valid || report.workflow.terminal !== "herdr") return;
+  try {
+    const backend = backendFor(report, p.root, issue, env, p);
+    backend.setTitle("supervisor", "supervisor · stopped");
+    for (const role of ROLES) backend.setTitle(role, `${role} · ${report.roles[role].agent} · STOPPED`);
+  } catch {
+    // The processes are already stopped; a missing herdr must not fail `gdt stop`.
+  }
 }
 
 /** `gdt stop <n>`: stops the supervisor, workers and running agents; `gdt start` resumes. */
@@ -127,6 +156,7 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
   if (state.status === "failed") Object.assign(state, { pids: { supervisor: null, workers: {} } });
   else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
+  markStopped(p, issue, env);
   // The printed next step is exactly what `gdt status` reports after this command.
   return ok(`Stopped #${issue}. Next: ${describe(state, false).next}\n`);
 }
