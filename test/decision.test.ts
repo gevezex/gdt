@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { type Decision, decide, type Snapshot } from "../src/decision.js";
 import { type Comment, KINDS, marker, parseRecords, type ProtocolRecord, type RecordData, schemas } from "../src/protocol.js";
+import { dispatchKey } from "../src/supervisor.js";
 
 const REPO = "gevezex/demo";
 const HASH = "a".repeat(64);
@@ -257,6 +258,61 @@ describe("AC-8: empty required checks follow the config", () => {
     ["allow_no_required_checks false", snapshot(approved, { pr, config: { max_correction_rounds: 2, required_checks: [], allow_no_required_checks: false } }), { action: "blocked", reason: "no required checks configured" }],
     ["allow_no_required_checks true", snapshot(approved, { pr, config: { max_correction_rounds: 2, required_checks: [], allow_no_required_checks: true } }), { action: "ready_to_merge" }],
   ]);
+});
+
+describe("AC-1: a new head lifts a verifier block", () => {
+  const prAt = (head: string) => ({ number: 40, head, mergeable: "mergeable" as const, checks: { ci: "success" as const } });
+  table([
+    [
+      "reviewer blocked for the previous head",
+      snapshot([handoff(2), review(3, { head: AAA, status: "blocked" })], { head_transition_at: at(4) }),
+      { action: "dispatch", role: "tester", round: 0 },
+    ],
+    [
+      "tester blocked for the previous head",
+      snapshot([handoff(2), test(3, { head: AAA, status: "blocked" })], { head_transition_at: at(4) }),
+      { action: "dispatch", role: "tester", round: 0 },
+    ],
+    [
+      "the head returned to the blocked SHA after a later transition",
+      snapshot([handoff(2), review(3, { head: AAA, status: "blocked" })], { pr: prAt(AAA), head_transition_at: at(5) }),
+      { action: "dispatch", role: "tester", round: 0 },
+    ],
+  ]);
+});
+
+describe("AC-2: the same head keeps the block", () => {
+  table([
+    [
+      "reviewer blocked for the current head",
+      snapshot([handoff(2), review(3, { status: "blocked" })]),
+      { action: "blocked", reason: "reviewer reported blocked" },
+    ],
+    [
+      "tester blocked for the current head",
+      snapshot([handoff(2), test(3, { status: "blocked" })]),
+      { action: "blocked", reason: "tester reported blocked" },
+    ],
+  ]);
+});
+
+describe("AC-3: a developer block is unchanged", () => {
+  table([
+    [
+      "developer blocked, then the head changes",
+      snapshot([handoff(2), handoff(3, 0, { status: "blocked" })], { head_transition_at: at(4) }),
+      { action: "blocked", reason: "developer reported blocked" },
+    ],
+  ]);
+});
+
+describe("AC-4: the lifted block does not consume a round", () => {
+  it("keeps round 0 and binds the dispatch to the new head", () => {
+    const decision = decide(snapshot([handoff(2), review(3, { head: AAA, status: "blocked" })], { head_transition_at: at(4) }));
+    expect(decision).toMatchObject({ action: "dispatch", role: "tester", round: 0 });
+    if (decision.action !== "dispatch") throw new Error("expected a tester dispatch");
+    expect(dispatchKey(decision, BBB, HASH)).toBe(`tester.r0.${BBB}.${HASH}`);
+  });
 });
 
 describe("decide() is pure", () => {
