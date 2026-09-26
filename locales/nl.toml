@@ -1,6 +1,7 @@
 # Everything the issue-contract validator must recognise in Dutch issue bodies.
 
-# Top-level key: it must come before the first [table].
+# Top-level keys: they must come before the first [table].
+name = "Dutch"
 vague_phrases = ["etc.", "enzovoort", "waar nodig", "netjes", "zoals gebruikelijk",
   "op de juiste manier", "robuust", "gebruiksvriendelijk", "en dergelijke"]
 

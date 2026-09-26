@@ -3,6 +3,8 @@ import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:
 import { dirname, resolve } from "node:path";
 import { adapterFor, type Invocation } from "./agents/index.js";
 import { loadConfig, type ResolvedRole, type Role, TEST_AGENT, testAgentsEnabled } from "./config.js";
+import { changedFiles, type Checkout, checkout } from "./git.js";
+import { buildPrompt } from "./prompts.js";
 import { alive, paths, readJson, readState, writeJsonAtomic } from "./state.js";
 import type { Dispatch, TurnResult } from "./supervisor.js";
 
@@ -27,20 +29,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }
 
-/** Minimal per-turn prompt: the dispatch facts. Role instructions are added by prompt construction (#6). */
-function prompt(dispatch: Dispatch): string {
-  return [
-    `# gdt ${dispatch.role} turn`,
-    "",
-    `Repository: ${dispatch.repository}`,
-    `Issue: #${dispatch.issue}`,
-    `Round: ${dispatch.round}`,
-    `Pull request: ${dispatch.pr_number === null ? "none" : `#${dispatch.pr_number}`}`,
-    `Head: ${dispatch.head ?? "none"}`,
-    `issue_body_sha256: ${dispatch.issue_body_sha256}`,
-    `Acceptance criteria: ${dispatch.acceptance_criteria.join(", ")}`,
-    "",
-  ].join("\n");
+/** A tester or reviewer must leave tracked files, the branch and HEAD as they were. */
+export function boundaryViolation(role: Role, before: Checkout, root: string, env: Env): string | undefined {
+  if (role === "developer") return undefined;
+  const changed = changedFiles(root, env, false);
+  if (changed.length > 0) return `${role} changed tracked files: ${changed.join(", ")}`;
+  const after = checkout(root, env);
+  const name = (branch: string) => (branch === "" ? "(detached)" : branch);
+  if (after.branch !== before.branch) return `${role} switched branch from ${name(before.branch)} to ${name(after.branch)}`;
+  if (after.head !== before.head) return `${role} moved HEAD from ${before.head} to ${after.head}`;
+  return undefined;
 }
 
 /** Runs one invocation and passes the agent's exit code through unchanged (null when killed by a signal). */
@@ -73,8 +71,9 @@ export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<n
 }
 
 async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: ReturnType<typeof paths>): Promise<void> {
-  const finish = (exit_code: number | null) => {
+  const finish = (exit_code: number | null, violation?: string) => {
     const result: TurnResult = { key: dispatch.key, exit_code, finished_at: new Date().toISOString() };
+    if (violation !== undefined) result.violation = violation;
     writeJsonAtomic(p.result(dispatch.key), result);
     log(`turn ${dispatch.key} finished with exit code ${exit_code}`);
   };
@@ -97,7 +96,13 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     return;
   }
   const promptFile = p.prompt(dispatch.key);
-  writeFileSync(promptFile, prompt(dispatch));
+  try {
+    writeFileSync(promptFile, buildPrompt(role, dispatch, { root, extraRules: report.contract.extra_rules }));
+  } catch (err) {
+    log(`cannot build the prompt: ${err instanceof Error ? err.message : String(err)}`);
+    finish(78);
+    return;
+  }
 
   let inv: Invocation;
   try {
@@ -120,7 +125,11 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     GDT_ISSUE_BODY_SHA256: dispatch.issue_body_sha256,
     GDT_DISPATCH_KEY: dispatch.key,
   };
-  finish(await runInvocation(inv, root, turnEnv));
+  const before = checkout(root, env);
+  const exitCode = await runInvocation(inv, root, turnEnv);
+  const violation = boundaryViolation(role, before, root, env);
+  if (violation !== undefined) log(violation);
+  finish(exitCode, violation);
 }
 
 /** Waits for dispatches for `role` without a model and runs one agent turn per dispatch key. */

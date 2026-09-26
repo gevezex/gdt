@@ -15,6 +15,7 @@
   "files": [
     "dist",
     "locales",
+    "roles",
     "schemas"
   ],
   "engines": {
