@@ -100,7 +100,7 @@ const BLOCK = new RegExp(`\\[gdt-(${KINDS.join("|")}):v1\\]([\\s\\S]*?)\\[/gdt-\
 
 /** Tolerates a Markdown code fence around the JSON object. */
 function unfence(content: string): string {
-  const fenced = /^\s*```[\w-]*\n([\s\S]*?)\n\s*```\s*$/.exec(content);
+  const fenced = /^\s*```[\w-]*\r?\n([\s\S]*?)\r?\n\s*```\s*$/.exec(content);
   return fenced?.[1] ?? content;
 }
 

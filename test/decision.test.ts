@@ -130,6 +130,17 @@ describe("AC-1: records are parsed; invalid ones are ignored with a reason", () 
     expect(records[0]?.data).toEqual(answer);
     expect(diagnostics).toEqual([]);
   });
+
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+  ])("reads a fenced record with %s line endings", (_name, eol) => {
+    const answer = { repository: REPO, issue: 12, question_id: "Q1", answer: "EUR" };
+    const body = [marker("answer"), "```json", JSON.stringify(answer), "```", marker("answer", true)].join(eol);
+    const { records, diagnostics } = parseRecords([comment(body)]);
+    expect(records.map((r) => r.data)).toEqual([answer]);
+    expect(diagnostics).toEqual([]);
+  });
 });
 
 describe("AC-2: untrusted authors and other issue hashes are ignored", () => {
@@ -177,6 +188,7 @@ describe("AC-5: round budget ends in blocked, and a round grant extends it", () 
       { action: "blocked", reason: "round budget exhausted; open findings: T-3" },
     ],
     ["with a later round grant", snapshot([handoff(2, 2), changes(2, 3), grant(3, 4)]), { action: "dispatch", role: "developer", round: 3 }],
+    ["verifier record with a stale round after a round-2 handoff", snapshot([handoff(2, 2), changes(0, 3)]), { action: "blocked", reason: "round budget exhausted; open findings: T-3" }],
     ["with an untrusted round grant", snapshot([handoff(2, 2), changes(2, 3), rec("round", { repository: REPO, issue: 12, round: 3 }, 4, "mallory")]), { action: "blocked" }],
     [
       "reviewer changes_requested on the last round",
@@ -211,6 +223,11 @@ describe("AC-7: ready_to_merge requires every gate", () => {
     ["one required check failed", snapshot(approved, { pr: pr({ checks: { ci: "failure", lint: "success" } }), config }), { action: "blocked", reason: "required check failed: ci" }],
     ["one required check missing", snapshot(approved, { pr: pr({ checks: { ci: "success" } }), config }), { action: "blocked", reason: "required check missing: lint" }],
     ["pull request conflicting", snapshot(approved, { pr: pr({ mergeable: "conflicting" }), config }), { action: "blocked", reason: "pull request has conflicts" }],
+    [
+      "a required check named like an Object.prototype member",
+      snapshot(approved, { pr: pr({ checks: {} }), config: { ...config, required_checks: ["constructor"] } }),
+      { action: "blocked", reason: "required check missing: constructor" },
+    ],
     ["mergeability unknown", snapshot(approved, { pr: pr({ mergeable: "unknown" }), config }), { action: "waiting_for_checks" }],
     [
       "an AC not passed",

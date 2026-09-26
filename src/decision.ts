@@ -89,8 +89,9 @@ function questionDecision(records: readonly ProtocolRecord[]): Decision | undefi
   };
 }
 
-function correction(snapshot: Snapshot, records: readonly ProtocolRecord[], record: Verifier): Decision {
-  const next = record.data.round + 1;
+function correction(snapshot: Snapshot, records: readonly ProtocolRecord[], record: Verifier, round: number): Decision {
+  // A verifier record with a stale or wrong round must not reset the budget.
+  const next = Math.max(round, record.data.round) + 1;
   const granted = records.some((r) => r.kind === "round" && r.data.round === next);
   const open = record.data.findings.map((f) => f.id);
   if (next > snapshot.config.max_correction_rounds && !granted) {
@@ -123,11 +124,12 @@ function gates(snapshot: Snapshot, pr: PullRequestSnapshot, approvals: readonly 
       ? { action: "ready_to_merge", reason: "approved; no required checks configured (allowed by config)" }
       : { action: "blocked", reason: "no required checks configured" };
   }
-  const missing = required.filter((name) => pr.checks[name] === undefined);
+  const state = (name: string): CheckState | undefined => (Object.hasOwn(pr.checks, name) ? pr.checks[name] : undefined);
+  const missing = required.filter((name) => state(name) === undefined);
   if (missing.length > 0) return { action: "blocked", reason: `required check missing: ${missing.join(", ")}` };
-  const failed = required.filter((name) => pr.checks[name] === "failure");
+  const failed = required.filter((name) => state(name) === "failure");
   if (failed.length > 0) return { action: "blocked", reason: `required check failed: ${failed.join(", ")}` };
-  const pending = required.filter((name) => pr.checks[name] === "pending");
+  const pending = required.filter((name) => state(name) === "pending");
   if (pending.length > 0) return { action: "waiting_for_checks", reason: `waiting for required checks: ${pending.join(", ")}` };
 
   return { action: "ready_to_merge", reason: "all gates passed" };
@@ -144,13 +146,13 @@ function evidence<K extends "test" | "review">(
 }
 
 /** A verifier record that is not an approval ends the chain here. */
-function verdict(snapshot: Snapshot, records: readonly ProtocolRecord[], record: Verifier): Decision | undefined {
+function verdict(snapshot: Snapshot, records: readonly ProtocolRecord[], record: Verifier, round: number): Decision | undefined {
   const role = ROLE_OF[record.kind];
   switch (record.data.status) {
     case "approved":
       return undefined;
     case "changes_requested":
-      return correction(snapshot, records, record);
+      return correction(snapshot, records, record, round);
     case "awaiting_human":
       return { action: "awaiting_human", reason: `${role} is waiting for a human decision` };
     case "blocked":
@@ -185,12 +187,12 @@ export function decide(snapshot: Snapshot): Decision {
 
   const test = evidence(records, "test", pr, after);
   if (test === undefined) return { action: "dispatch", role: "tester", round, reason: `no tester evidence for head ${pr.head}` };
-  const afterTest = verdict(snapshot, records, test);
+  const afterTest = verdict(snapshot, records, test, round);
   if (afterTest !== undefined) return afterTest;
 
   const review = evidence(records, "review", pr, Math.max(after, time(test.created_at)));
   if (review === undefined) return { action: "dispatch", role: "reviewer", round, reason: `no reviewer evidence for head ${pr.head}` };
-  const afterReview = verdict(snapshot, records, review);
+  const afterReview = verdict(snapshot, records, review, round);
   if (afterReview !== undefined) return afterReview;
 
   return gates(snapshot, pr, [test, review]);
