@@ -61,4 +61,6 @@ Allowed `status` values:
 When a product decision is missing, do not guess. Post a `[gdt-question:v1]` record: on the pull
 request if it exists, otherwise on the issue with `gh issue comment`. Use `role` `developer`,
 `resume_role` `developer`, a new `question_id` (`Q1`, `Q2`, ...), and the question text.
-Copy `repository`, `issue`, `round`, `pr_number`, `issue_body_sha256` and `acceptance_criteria` from the dispatch facts, as for your record. Then stop. The supervisor resumes you after a human answers.
+Copy `repository`, `issue`, `round`, `pr_number`, `issue_body_sha256` and `acceptance_criteria`
+from the dispatch facts, as for your record. Then stop. The supervisor resumes you after a human
+answers.
