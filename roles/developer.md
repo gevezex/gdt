@@ -40,7 +40,9 @@ Post one comment on the pull request containing the marker, one JSON object and 
 [/gdt-handoff:v1]
 ```
 
-Use `gh pr comment <pr> --body-file <file>`. Copy `repository`, `issue`, `round`,
+Use `gh pr comment <pr> --body-file <file>`; if no pull request exists (a `blocked` or
+`awaiting_human` handoff before the first push), post it on the issue with `gh issue comment` instead.
+Copy `repository`, `issue`, `round`,
 `issue_body_sha256` and `acceptance_criteria` exactly from the dispatch facts. Set `pr_number` to the
 pull request number. For each AC, `ac_traceability` lists the files and tests that implement it.
 Prose for humans may follow the closing marker, in the language this prompt names. Marker, keys and
@@ -58,5 +60,5 @@ Allowed `status` values:
 
 When a product decision is missing, do not guess. Post a `[gdt-question:v1]` record: on the pull
 request if it exists, otherwise on the issue with `gh issue comment`. Use `role` `developer`,
-`resume_role` `developer`, a new `question_id` (`Q1`, `Q2`, ...), and the question text. Then stop. The
-supervisor resumes you after a human answers.
+`resume_role` `developer`, a new `question_id` (`Q1`, `Q2`, ...), and the question text.
+Copy `repository`, `issue`, `round`, `pr_number`, `issue_body_sha256` and `acceptance_criteria` from the dispatch facts, as for your record. Then stop. The supervisor resumes you after a human answers.

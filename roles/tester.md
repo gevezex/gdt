@@ -54,3 +54,5 @@ Allowed `status` values:
 
 When an AC can be read in two ways, do not pick one. Post a `[gdt-question:v1]` record on the pull
 request with `role` `tester`, `resume_role` `tester`, a new `question_id` and the question, then stop.
+Copy `repository`, `issue`, `round`, `pr_number`, `issue_body_sha256` and `acceptance_criteria`
+from the dispatch facts, as for your record.

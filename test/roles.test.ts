@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -133,7 +133,7 @@ describe("AC-4: directives reach only their role, once", () => {
   });
 
   it("puts a directive in exactly one developer prompt across two dispatches", { timeout: 30_000 }, async () => {
-    const log = join(tmpdir(), `gdt-prompts-${process.pid}-${Date.now()}`);
+    const log = join(mkdtempSync(join(tmpdir(), "gdt-prompts-")), "prompts.log");
     const w = world({ developer: `/bin/cat "$GDT_PROMPT_FILE" >> "${log}"\ngh fake-record 12 question\nexit 0\n` });
     await editGithub(w, (data) => {
       data.comments["12"] = [directiveComment(5, "developer", "Reuse parseAmount"), directiveComment(6, "tester", "Test negative amounts")];
@@ -248,7 +248,8 @@ describe("AC-8: check-issue accepts a local body file", () => {
 
   it("validates the file without calling GitHub", () => {
     const root = tempRepo({ "body.md": threeAcs });
-    const bin = fakePath();
+    // The fake gh would serve an invalid body and log its arguments if it were called.
+    const bin = fakePath({ issueBody: "## Goal\n" });
     const result = gdtInProcess(["check-issue", "--body-file", "body.md"], root, bin);
     expect(result.stdout).toBe("body.md: contract valid (3 acceptance criteria)\n");
     expect(result.code).toBe(0);
