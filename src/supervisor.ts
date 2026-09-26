@@ -158,7 +158,11 @@ class Supervisor {
     // A turn in flight: nothing to fetch until its worker has reported.
     const running = this.state.inflight;
     if (running !== null) {
-      if (running.missing) return "continue";
+      if (running.missing) {
+        // Also restores the status after a stop and start.
+        this.setStatus("blocked", `${running.role} finished without a visible handoff`, { role: running.role, round: running.round });
+        return "continue";
+      }
       const result = readJson<TurnResult>(this.p.result(running.key));
       if (result === null) {
         this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });
@@ -249,7 +253,9 @@ class Supervisor {
       acceptance_criteria: contract.acceptance_criteria,
       dispatched_at: now.toISOString(),
     };
-    // Record the key before the dispatch file exists, so a restart can never dispatch it twice.
+    // Dispatch file first: if gdt stop lands in between, the restarted supervisor dispatches the same key
+    // again, and the worker's exclusive "started" marker still runs it at most once.
+    writeJsonAtomic(this.p.dispatch(decision.role), dispatch);
     this.state.dispatched.push(key);
     this.state.inflight = {
       key,
@@ -261,7 +267,6 @@ class Supervisor {
       missing: false,
     };
     this.setStatus("running", `dispatched ${decision.role}: ${decision.reason}`, { role: decision.role, round: decision.round, exit_code: null });
-    writeJsonAtomic(this.p.dispatch(decision.role), dispatch);
     log(`dispatched ${key}`);
     return "continue";
   }

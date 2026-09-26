@@ -260,6 +260,14 @@ describe("AC-4: a failing agent turn stops the workflow with a recovery hint", {
     const status = gdt(w, "status", "12");
     expect(status.stdout).toBe("developer turn failed (exit code 3). Next: gdt retry 12\n");
     expect(status.code).toBe(0);
+
+    // stop keeps the failure, and start points to retry instead of resuming.
+    expect(gdt(w, "stop", "12").code).toBe(0);
+    expect(gdt(w, "status", "12").stdout).toBe("developer turn failed (exit code 3). Next: gdt retry 12\n");
+    expect(gdt(w, "start", "12")).toMatchObject({
+      code: 1,
+      stderr: "Workflow for #12 failed: developer turn failed (exit code 3). Next: gdt retry 12\n",
+    });
   });
 });
 
@@ -273,6 +281,17 @@ describe("AC-5: a missing handoff is detected within a bounded number of checks"
     expect(state.inflight).toMatchObject({ checks: 5, missing: true });
     expect(supervisorLog(w)).toContain("handoff check 5/5");
     expect(gdt(w, "status", "12").stdout).toBe("blocked: developer finished without a visible handoff. Next: gdt retry 12\n");
+  });
+
+  it("stays blocked with the retry hint after a stop and start", async () => {
+    const w = world({ developer: "exit 0\n", handoffChecks: 3 });
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await waitFor("blocked", () => stateOf(w).status === "blocked");
+    expect(gdt(w, "stop", "12").code).toBe(0);
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await waitFor("blocked again", () => stateOf(w).status === "blocked");
+    expect(gdt(w, "status", "12").stdout).toBe("blocked: developer finished without a visible handoff. Next: gdt retry 12\n");
+    expect(lines(join(w.bin, "notifications"))).toHaveLength(1);
   });
 
   it("continues when the record appears on the third check", async () => {
@@ -330,6 +349,13 @@ describe("AC-7: unknown working-tree changes block Round 0", { timeout: 30_000 }
     expect(result.stderr).toBe("Working tree not clean: src/a.ts. Commit or stash before starting.\n");
     expect(lockPid(w)).toBeNull();
     expect(existsSync(join(w.root, ".git/gdt/issue-12/state.json"))).toBe(false);
+  });
+
+  it("lists renamed and untracked files, including names with spaces", () => {
+    const w = world({ extraFiles: { "src/a.ts": "export {};\n" } });
+    spawnSync(GIT, ["mv", "src/a.ts", "src/b c.ts"], { cwd: w.root });
+    writeFileSync(join(w.root, "new.txt"), "x\n");
+    expect(gdt(w, "start", "12").stderr).toBe("Working tree not clean: src/b c.ts, new.txt. Commit or stash before starting.\n");
   });
 
   it("refuses an invalid issue contract", async () => {

@@ -27,11 +27,17 @@ function sleepSync(ms: number): void {
 }
 
 function changedFiles(root: string, env: Env): string[] {
-  const result = spawnSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: root, env, encoding: "utf8" });
-  return result.stdout
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line) => line.slice(3));
+  const result = spawnSync("git", ["status", "--porcelain", "-z", "--untracked-files=all"], { cwd: root, env, encoding: "utf8" });
+  const entries = result.stdout.split("\0");
+  const files: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i] ?? "";
+    if (entry.length < 4) continue;
+    files.push(entry.slice(3));
+    // A rename or copy is followed by its original path.
+    if (entry[0] === "R" || entry[0] === "C") i++;
+  }
+  return files;
 }
 
 function newState(issue: number, repo: string): State {
@@ -72,6 +78,7 @@ export function start(issue: number, cwd: string, env: Env): CommandResult {
   if (holder !== null) return fail(`Supervisor for #${issue} is already running (pid ${holder})\n`);
 
   const existing = readState(p);
+  if (existing?.status === "failed") return fail(`Workflow for #${issue} failed: ${existing.reason}. Next: gdt retry ${issue}\n`);
   if (existing === null || existing.dispatched.length === 0) {
     const changed = changedFiles(root, env);
     if (changed.length > 0) return fail(`Working tree not clean: ${changed.join(", ")}. Commit or stash before starting.\n`);
@@ -124,7 +131,9 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
 
   // Re-read: the supervisor may have written state until it was stopped.
   const state = readState(p) ?? before;
-  Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
+  // A failed turn keeps its status and reason; only the recovery step (gdt retry) clears it.
+  if (state.status === "failed") Object.assign(state, { pids: { supervisor: null, workers: {} } });
+  else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
   return ok(`Stopped #${issue}. Next: gdt start ${issue}\n`);
 }
