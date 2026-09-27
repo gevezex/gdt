@@ -75,8 +75,11 @@ user steers. Steering is therefore a first-class feature of the supervisor
 1. **The supervisor never runs as a child of the operator.** `gdt start` launches it
    in its own terminal-backend pane or detached process and returns. Closing or
    compacting the operator session never stops a workflow.
-2. **No polling.** After starting, the operator goes idle. The supervisor
-   notifies the user; the user returns to the operator.
+2. **No polling.** After starting, the operator runs `gdt wait <n>` as a
+   background task whose completion wakes it and relays the result to the user.
+   It never repeats `gdt status` from model turns to wait, and `gdt wait` reads
+   only local state. The supervisor notifies the user; the user returns to the
+   operator.
 3. **No invented answers.** The operator posts a human answer or directive only
    with the user's literal words or after the user explicitly confirmed the text.
    It never presents its own product choice as the user's answer.

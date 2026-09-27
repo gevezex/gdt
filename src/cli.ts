@@ -11,7 +11,7 @@ import { loadLocale } from "./locale.js";
 import { allowRound, answer, installSkill, pause, resume, setAgent, steer } from "./steering.js";
 import { supervise } from "./supervisor.js";
 import { work } from "./worker.js";
-import { type CommandResult, retry, start, status, stop } from "./workflow.js";
+import { type CommandResult, retry, start, status, stop, wait } from "./workflow.js";
 
 export interface Io {
   cwd: string;
@@ -35,6 +35,7 @@ Commands:
   check-issue   Validate an issue body against the issue contract
   start         Start the workflow for an issue in the background
   status        Show the workflow status and the next step
+  wait          Wait until the workflow needs attention
   stop          Stop the workflow for an issue; start resumes it
   retry         Prepare a controlled retry of the failed turn
   answer        Answer an open question
@@ -76,6 +77,14 @@ role workers as detached processes and returns. Logs: .git/gdt/issue-<n>/logs.
   status: `Usage: gdt status <issue> [--json]
 
 Shows the workflow status and the next step.
+`,
+  wait: `Usage: gdt wait <issue> [--timeout <seconds>] [--json]
+
+Blocks on the local workflow state and returns with the "gdt status" output as
+soon as the workflow needs attention (an action status) or the supervisor is
+gone. It returns at once when the workflow is already in an action status.
+--timeout gives up after the given number of seconds and exits 1. Reads only
+local state under .git/gdt/.
 `,
   stop: `Usage: gdt stop <issue>
 
@@ -282,6 +291,33 @@ function workflowCommand(command: WorkflowCommandName, args: readonly string[], 
   return emit(result, io);
 }
 
+/** `gdt wait <issue> [--timeout <seconds>] [--json]`: blocks until the workflow needs attention. */
+function waitCommand(args: readonly string[], io: Io): number {
+  let json = false;
+  let timeoutSeconds: number | null = null;
+  let issue: number | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--json") json = true;
+    else if (arg === "--help" || arg === "-h") {
+      io.stdout(WORKFLOW_HELP.wait ?? HELP);
+      return EXIT_OK;
+    } else if (arg === "--timeout") {
+      const value = args[++i];
+      const seconds = value === undefined ? Number.NaN : Number(value);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        return usageError(io, `Expected a positive number of seconds after "--timeout", got "${value ?? ""}".`, "gdt wait --help");
+      }
+      timeoutSeconds = seconds;
+    } else if (arg.startsWith("-")) {
+      return usageError(io, `Unknown option "${arg}" for "gdt wait".`, "gdt wait --help");
+    } else if (issue === undefined && /^[1-9]\d*$/.test(arg)) issue = Number(arg);
+    else return usageError(io, `Unexpected argument "${arg}" for "gdt wait".`, "gdt wait --help");
+  }
+  if (issue === undefined) return usageError(io, 'Missing issue number for "gdt wait".', "gdt wait --help");
+  return emit(wait(issue, io.cwd, io.env, { json, timeoutSeconds }), io);
+}
+
 /** `gdt answer <issue> <question-id> <text>`; everything after the id is the answer text. */
 function answerCommand(args: readonly string[], io: Io): number {
   if (args.includes("--help") || args.includes("-h")) {
@@ -382,6 +418,8 @@ export function run(argv: readonly string[], io: Io): number {
     case "resume":
     case "allow-round":
       return workflowCommand(command, rest, io);
+    case "wait":
+      return waitCommand(rest, io);
     case "answer":
       return answerCommand(rest, io);
     case "steer":
