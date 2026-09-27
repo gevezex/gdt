@@ -5,6 +5,8 @@ export const pi: Adapter = {
   binary: "pi",
   title: "pi",
   install: "Install pi: npm i -g --ignore-scripts @earendil-works/pi-coding-agent",
+  modelFormat: "provider/id",
+  modelExample: "anthropic/claude-sonnet-4",
   buildInvocation: (_role, model, promptFile) => ({
     argv: ["pi", "--print", "--model", model, "--no-session", "--no-approve"],
     env: {},

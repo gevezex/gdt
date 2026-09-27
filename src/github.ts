@@ -72,6 +72,41 @@ export function viewer(cwd: string, env: Env): string {
   return ghJson<{ login: string }>(["api", "user"], cwd, env).login;
 }
 
+/**
+ * The distinct names of the check runs and commit statuses on the latest commit of the repository's
+ * default branch, sorted alphabetically. Returns `[]` when `gh` cannot read them (no remote, no
+ * authentication, no GitHub): `gdt init` then treats the repository as having no detected checks.
+ */
+export function detectedChecks(cwd: string, env: Env): string[] {
+  try {
+    const repo = ghJson<{ nameWithOwner?: unknown; defaultBranchRef?: { name?: unknown } }>(
+      ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"],
+      cwd,
+      env,
+    );
+    const name = typeof repo.nameWithOwner === "string" ? repo.nameWithOwner : null;
+    const branch = typeof repo.defaultBranchRef?.name === "string" ? repo.defaultBranchRef.name : null;
+    if (name === null || branch === null) return [];
+    const runs = ghJson<{ check_runs?: { name?: unknown }[] }>(
+      ["api", `repos/${name}/commits/${branch}/check-runs`],
+      cwd,
+      env,
+    );
+    const statuses = ghJson<{ statuses?: { context?: unknown }[] }>(
+      ["api", `repos/${name}/commits/${branch}/status`],
+      cwd,
+      env,
+    );
+    const names = [
+      ...(runs.check_runs ?? []).map((run) => run.name),
+      ...(statuses.statuses ?? []).map((status) => status.context),
+    ].filter((value): value is string => typeof value === "string" && value !== "");
+    return [...new Set(names)].sort();
+  } catch {
+    return [];
+  }
+}
+
 /** The issue body and the open pull requests that close the issue ("Closes #n"). */
 export function issueSnapshot(issue: number, cwd: string, env: Env): { body: string; pullRequests: number[] } {
   const data = ghJson<{ body: string; closedByPullRequestsReferences?: { number: number }[] }>(

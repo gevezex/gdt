@@ -4,10 +4,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig, ROLES, type Role } from "./config.js";
 import { validateContract } from "./contract.js";
-import { findRepository, runDoctor } from "./doctor.js";
+import { findRepository, herdrPreflight, runDoctor } from "./doctor.js";
 import type { Finding } from "./finding.js";
-import { issueBody } from "./github.js";
-import { loadLocale } from "./locale.js";
+import { detectedChecks, issueBody } from "./github.js";
+import { parseRoleSpec, type Proposal, proposal, type RoleSpec, serializeConfig, writeConfig } from "./init.js";
+import { loadLocale, shippedLanguages } from "./locale.js";
 import { allowRound, answer, installSkill, pause, resume, setAgent, steer } from "./steering.js";
 import { supervise } from "./supervisor.js";
 import { work } from "./worker.js";
@@ -31,6 +32,7 @@ Usage:
   gdt <command> [options]
 
 Commands:
+  init          Create .gdt/config.toml and install the operator skill
   doctor        Check tools, GitHub authentication and .gdt/config.toml
   check-issue   Validate an issue body against the issue contract
   start         Start the workflow for an issue in the background
@@ -57,6 +59,28 @@ const DOCTOR_HELP = `Usage: gdt doctor [--json]
 Checks that git and gh are installed, gh is authenticated, and that
 .gdt/config.toml (merged with .gdt/config.local.toml) is valid.
 Exits with 1 when any finding has level "error".
+`;
+
+const INIT_HELP = `Usage: gdt init [--json]
+       gdt init --developer <agent>/<model> --tester <agent>/<model> --reviewer <agent>/<model>
+                [--language <lang>] [--terminal <herdr|headless>]
+                [--required-check <name>]... [--allow-no-required-checks] [--force]
+
+Without the three role options, reports the supported agents, whether each is on
+PATH, the usable terminal, the detected CI checks and the language, and writes
+nothing. With them, writes .gdt/config.toml, runs "gdt doctor" and installs the
+operator skill.
+
+Options:
+  --developer <agent>/<model>    Agent and model for the developer role
+  --tester <agent>/<model>       Agent and model for the tester role
+  --reviewer <agent>/<model>     Agent and model for the reviewer role
+  --language <lang>              Language for human-facing text (default en)
+  --terminal <herdr|headless>    Terminal backend (default: herdr when usable)
+  --required-check <name>        CI check that must pass; repeatable
+  --allow-no-required-checks     Accept an empty required_checks list
+  --force                        Replace an existing .gdt/config.toml
+  --json                         Machine-readable proposal output
 `;
 
 const CHECK_ISSUE_HELP = `Usage: gdt check-issue <issue> [--json]
@@ -165,6 +189,133 @@ function doctor(args: readonly string[], io: Io): number {
 
   const report = runDoctor(io.cwd, io.env);
   io.stdout(json ? `${JSON.stringify(report, null, 2)}\n` : formatFindings(report.findings));
+  return report.ok ? EXIT_OK : EXIT_FAILED;
+}
+
+function formatProposal(facts: Proposal): string {
+  const lines = ["agents:"];
+  for (const choice of facts.agents) {
+    lines.push(`  ${choice.agent}  ${choice.found ? "found" : "not found"}  model: ${choice.model_format}, example: ${choice.example}`);
+  }
+  lines.push(
+    `terminal: ${facts.terminal}`,
+    `required_checks: ${facts.required_checks.length === 0 ? "none" : facts.required_checks.join(", ")}`,
+    `language: ${facts.language}`,
+    "",
+    "Next: gdt init --developer <agent>/<model> --tester <agent>/<model> --reviewer <agent>/<model>",
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * `gdt init`: without role options, reports the proposal (AC-1); with all three, writes
+ * `.gdt/config.toml` (AC-2 to AC-5), then runs doctor and installs the skill (AC-6, AC-7).
+ */
+function initCommand(args: readonly string[], io: Io): number {
+  let developer: string | undefined;
+  let tester: string | undefined;
+  let reviewer: string | undefined;
+  let language: string | undefined;
+  let terminal: "herdr" | "headless" | undefined;
+  const requiredChecks: string[] = [];
+  let allowNoRequiredChecks = false;
+  let force = false;
+  let json = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--json") json = true;
+    else if (arg === "--force") force = true;
+    else if (arg === "--allow-no-required-checks") allowNoRequiredChecks = true;
+    else if (arg === "--help" || arg === "-h") {
+      io.stdout(INIT_HELP);
+      return EXIT_OK;
+    } else if (arg === "--developer" || arg === "--tester" || arg === "--reviewer" || arg === "--language" || arg === "--terminal" || arg === "--required-check") {
+      const given = args[++i];
+      if (given === undefined) return usageError(io, `Missing value for "${arg}".`, "gdt init --help");
+      if (arg === "--developer") developer = given;
+      else if (arg === "--tester") tester = given;
+      else if (arg === "--reviewer") reviewer = given;
+      else if (arg === "--language") language = given;
+      else if (arg === "--terminal") {
+        if (given !== "herdr" && given !== "headless") {
+          return usageError(io, `Invalid terminal "${given}"; use herdr or headless.`, "gdt init --help");
+        }
+        terminal = given;
+      } else requiredChecks.push(given);
+    } else if (arg.startsWith("-")) return usageError(io, `Unknown option "${arg}" for "gdt init".`, "gdt init --help");
+    else return usageError(io, `Unexpected argument "${arg}" for "gdt init".`, "gdt init --help");
+  }
+
+  const root = findRepository(io.cwd);
+  if (root === null) {
+    io.stderr(`${io.cwd} is not inside a Git repository. Run gdt from a checkout of the target repository.\n`);
+    return EXIT_FAILED;
+  }
+
+  const specs: Record<Role, string | undefined> = { developer, tester, reviewer };
+  const given = ROLES.filter((role) => specs[role] !== undefined);
+  if (given.length === 0) {
+    const facts = proposal(root, io.env);
+    io.stdout(json ? `${JSON.stringify(facts, null, 2)}\n` : formatProposal(facts));
+    return EXIT_OK;
+  }
+  if (given.length < ROLES.length) {
+    const missing = ROLES.filter((role) => specs[role] === undefined)
+      .map((role) => `"--${role}"`)
+      .join(", ");
+    return usageError(io, `Missing ${missing} for "gdt init".`, "gdt init --help");
+  }
+
+  const roles = {} as Record<Role, RoleSpec>;
+  for (const role of ROLES) {
+    const parsed = parseRoleSpec(specs[role] ?? "");
+    if ("error" in parsed) {
+      io.stderr(`${parsed.error}\n`);
+      return EXIT_FAILED;
+    }
+    roles[role] = parsed;
+  }
+
+  const languages = shippedLanguages();
+  if (language !== undefined && !languages.includes(language)) {
+    io.stderr(`No locale for language "${language}"; available languages: ${languages.join(", ")}\n`);
+    return EXIT_FAILED;
+  }
+
+  if (existsSync(join(root, CONFIG_PATH)) && !force) {
+    io.stderr(`${CONFIG_PATH} already exists; use --force to replace it\n`);
+    return EXIT_FAILED;
+  }
+
+  const resolvedTerminal = terminal ?? (herdrPreflight(io.env) === null ? "herdr" : "headless");
+  const checks = requiredChecks.length > 0 ? requiredChecks : detectedChecks(root, io.env);
+  if (checks.length === 0 && !allowNoRequiredChecks) {
+    io.stderr(
+      "No required checks detected; pass --required-check <name> for each check, or --allow-no-required-checks to accept none\n",
+    );
+    return EXIT_FAILED;
+  }
+
+  const text = serializeConfig({
+    roles,
+    language: language ?? DEFAULT_LANGUAGE,
+    terminal: resolvedTerminal,
+    requiredChecks: checks,
+    allowNoRequiredChecks,
+  });
+  const writeError = writeConfig(root, text);
+  if (writeError !== null) {
+    io.stderr(`${writeError}\n`);
+    return EXIT_FAILED;
+  }
+
+  // AC-7: report the new config with doctor, then install the skill; the config stays in place either way.
+  const report = runDoctor(root, io.env);
+  io.stdout(formatFindings(report.findings));
+  const installed = installSkill(io.env);
+  io.stdout(installed.stdout);
+  if (installed.stderr !== "") io.stderr(installed.stderr);
   return report.ok ? EXIT_OK : EXIT_FAILED;
 }
 
@@ -408,6 +559,8 @@ export function run(argv: readonly string[], io: Io): number {
       return EXIT_OK;
     case "doctor":
       return doctor(rest, io);
+    case "init":
+      return initCommand(rest, io);
     case "check-issue":
       return checkIssue(rest, io);
     case "start":

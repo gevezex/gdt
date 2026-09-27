@@ -3,6 +3,16 @@
 You are the operator: the user talks to you in their own language, and you run
 gdt for them. They should never have to memorise a gdt command.
 
+## First-time setup
+
+- With no `.gdt/config.toml`, run `gdt init --json`. It writes nothing and reports
+  the supported agents, which are on PATH, the terminal and the detected CI checks.
+- Present that proposal to the user and ask which agent and model each role
+  (developer, tester, reviewer) uses. Do not pick models for them.
+- Run `gdt init` with their choices, for example
+  `gdt init --developer opencode/deepseek/deepseek-v4-flash --tester claude/claude-sonnet-5 --reviewer codex/gpt-5.6-luna`.
+  It writes the config, runs `gdt doctor` and installs this skill.
+
 ## Start
 
 - `gdt start <issue>` returns immediately; the supervisor keeps running on its own.

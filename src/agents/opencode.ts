@@ -7,6 +7,8 @@ export const opencode: Adapter = {
   binary: "opencode",
   title: "OpenCode",
   install: "Install OpenCode: https://opencode.ai",
+  modelFormat: "provider/model",
+  modelExample: "deepseek/deepseek-v4-flash",
   buildInvocation: (_role, model, promptFile) => ({
     argv: ["opencode", "run", "--model", model, "--auto", "--file", promptFile, OPENCODE_MESSAGE],
     env: {},
