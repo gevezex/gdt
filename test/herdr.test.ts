@@ -56,7 +56,7 @@ describe("AC-1: start creates the workspace with four panes", { timeout: 30_000 
 
 describe("panes run left to right in role order with equal widths", { timeout: 30_000 }, () => {
   it("lays out supervisor, developer, tester and reviewer at a quarter each", async () => {
-    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, herdrLayout: "split", developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("four panes", () => herdrPanes(w).length === 4);
 

@@ -55,8 +55,8 @@ function configSchemaFor(testAgents: boolean) {
       allow_no_required_checks: z.boolean().default(false),
       terminal: z.enum(TERMINALS).default("herdr"),
       supervisor_pane: z.boolean().default(false),
-      // AC-2: `split` (the default) keeps the existing layout; `tabs` gives each pane its own tab.
-      herdr_layout: z.enum(HERDR_LAYOUTS).default("split"),
+      // Default `tabs`: one tab per managed pane. `split` keeps the panes in one tab.
+      herdr_layout: z.enum(HERDR_LAYOUTS).default("tabs"),
       poll_seconds: z.number().positive().default(30),
       handoff_checks: z.int().min(1).default(5),
     }),

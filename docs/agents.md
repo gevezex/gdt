@@ -8,9 +8,9 @@ role workers in panes of one herdr workspace named `gdt-<issue>` (design 9.6); p
 agent. By default the supervisor has no pane: it runs detached and writes
 `logs/supervisor.log`, like headless. Set `workflow.supervisor_pane = true` to give the supervisor a
 pane as well (title `supervisor · <status>`), as before this option existed. `workflow.herdr_layout`
-selects the layout: `split` (the default) keeps the managed panes left to right in one tab; `tabs`
-gives each managed pane its own tab, labelled with the pane name (`supervisor`, `developer`,
-`tester`, `reviewer`). Switching the layout rearranges the existing panes on the next `gdt start`.
+selects the layout: `tabs` (the default) gives each managed pane its own tab, labelled with the pane
+name (`supervisor`, `developer`, `tester`, `reviewer`); `split` keeps the managed panes left to right
+in one tab. Switching the layout rearranges the existing panes on the next `gdt start`.
 
 The minimum supported herdr version is **0.9.1**, the version the workspace, pane and title commands
 this backend uses were verified against. `gdt doctor` reports an error when herdr is missing, cannot
