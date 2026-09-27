@@ -21,6 +21,8 @@ OpenCode, MCode, pi or omp) and can watch the roles work in
 [herdr](https://herdr.dev). **You always merge yourself**: gdt never merges,
 deploys or closes issues.
 
+![gdt in herdr: the developer, tester and reviewer roles working on one issue](docs/assets/gdt-animation.gif)
+
 ## How it works
 
 ### The big picture
