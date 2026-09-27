@@ -6,6 +6,10 @@ gdt for them. They should never have to memorise a gdt command.
 ## Start
 
 - `gdt start <issue>` returns immediately; the supervisor keeps running on its own.
+- Then run `gdt wait <issue>` as a background task whose completion wakes you.
+  It blocks on local state without using model tokens and returns with the
+  status output when the workflow needs attention (a question, a block or a
+  finish) or the supervisor is gone. Relay that result to the user.
 - `gdt status <issue> --json` reports `status`, `role`, `round`, `max_rounds`,
   `pr_number`, `open_findings` and `next_step`. Read it before you answer.
 - Follow `next_step` to move the workflow forward.
@@ -30,8 +34,9 @@ gdt for them. They should never have to memorise a gdt command.
 1. The supervisor never runs as a child of the operator. `gdt start` launches it
    in its own pane or detached process and returns; closing or compacting your
    session never stops a workflow.
-2. No polling. After starting, go idle. The supervisor notifies the user; the
-   user comes back to you.
+2. No polling. After starting, run `gdt wait <issue>` as a background task whose
+   completion wakes you. Never repeat `gdt status` from model turns to wait. The
+   supervisor notifies the user; the user comes back to you.
 3. No invented answers. Never post an answer or directive the user did not state or confirm.
    Never present your own product choice as the user's answer.
 4. Hands off the working tree. Read state and logs and run gdt commands; code

@@ -23,6 +23,19 @@ export interface CommandResult {
 export const ok = (stdout: string): CommandResult => ({ code: 0, stdout, stderr: "" });
 export const fail = (stderr: string): CommandResult => ({ code: 1, stdout: "", stderr });
 
+/** Statuses that need a person or end the workflow: `gdt wait` returns when it reaches one. */
+const ACTION_STATUSES: readonly Status[] = [
+  "awaiting_human",
+  "blocked",
+  "failed",
+  "ready_to_merge",
+  "contract_changed",
+  "stopped",
+];
+
+/** How often `gdt wait` re-reads the local state; well under the 2 seconds the contract allows. */
+const WAIT_POLL_MS = 200;
+
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -122,12 +135,15 @@ function loadBackend(p: Paths, issue: number, env: Env): Backend {
   return report.valid ? backendFor(report, p.root, issue, env, p) : headless(p.logs, p.root, env);
 }
 
-/** Stops the supervisor, its workers and any running agent, and releases the lock. */
+/**
+ * Stops the supervisor, its workers and any running agent. It does not release the lock: the caller
+ * releases it after writing the final state, so `gdt wait` never sees the lock vanish while the state
+ * is still a waiting status (AC-4 would otherwise fire for a deliberate stop).
+ */
 export function stopProcesses(p: Paths, state: State, env: Env): void {
   const backend = loadBackend(p, state.issue, env);
   const pids = [lockHolder(p), state.pids.supervisor, ...ROLES.map((role) => state.pids.workers[role])];
   for (const pid of new Set(pids)) if (pid !== null && pid !== undefined && alive(pid)) backend.close(pid);
-  rmSync(p.lock, { force: true });
 }
 
 /** AC-6: after stopping, every herdr pane shows STOPPED; the gdt processes printed the last line. */
@@ -158,6 +174,8 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
   if (state.status === "failed") Object.assign(state, { pids: { supervisor: null, workers: {} } });
   else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
+  // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
+  rmSync(p.lock, { force: true });
   markStopped(p, issue, env);
   // The printed next step is exactly what `gdt status` reports after this command.
   return ok(`Stopped #${issue}. Next: ${describe(state, false).next}\n`);
@@ -195,6 +213,8 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
     pids: { supervisor: null, workers: {} },
   });
   writeState(p, state);
+  // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
+  rmSync(p.lock, { force: true });
   return ok(`Retry prepared for #${issue}. Next: ${describe(state, false).next}\n`);
 }
 
@@ -231,6 +251,12 @@ export function describe(state: State, supervisorAlive: boolean): { line: string
   }
 }
 
+/** The state as status and wait see it: the pause file reports `paused` until the workflow ends. */
+function effectiveState(p: Paths, state: State): State {
+  const paused = existsSync(p.pause) && state.status !== "stopped" && state.status !== "failed";
+  return paused ? { ...state, status: "paused" as Status, reason: "" } : state;
+}
+
 /** `gdt status <n>`. The pause file reports `paused` even before the supervisor notices it. */
 export function status(issue: number, cwd: string, env: Env, json: boolean): CommandResult {
   const root = findRepository(cwd) ?? cwd;
@@ -241,8 +267,7 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
       ? { code: 1, stdout: `${JSON.stringify({ issue, status: null, next_step: `gdt start ${issue}` }, null, 2)}\n`, stderr: "" }
       : fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
   }
-  const paused = existsSync(p.pause) && state.status !== "stopped" && state.status !== "failed";
-  const effective: State = paused ? { ...state, status: "paused" as Status, reason: "" } : state;
+  const effective = effectiveState(p, state);
   const { line, next } = describe(effective, lockHolder(p) !== null);
   if (!json) return ok(`${line}. Next: ${next}\n`);
 
@@ -264,4 +289,34 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
     next_step: next,
   };
   return ok(`${JSON.stringify(out, null, 2)}\n`);
+}
+
+export interface WaitOptions {
+  json: boolean;
+  /** Seconds to wait before giving up; null waits until the workflow needs attention. */
+  timeoutSeconds: number | null;
+}
+
+/**
+ * `gdt wait <n>`: blocks on the local workflow state only (no gh, no model tokens) and returns with
+ * the `gdt status` output as soon as the workflow reaches an action status. It also returns when the
+ * supervisor dies in a waiting status, because that is an event the operator must relay (AC-4).
+ */
+export function wait(issue: number, cwd: string, env: Env, options: WaitOptions): CommandResult {
+  const root = findRepository(cwd) ?? cwd;
+  const p = paths(root, issue, env);
+  const deadline = options.timeoutSeconds === null ? null : Date.now() + options.timeoutSeconds * 1000;
+  for (;;) {
+    const state = readState(p);
+    // No workflow is status's error path (AC-6); an action status returns at once (AC-1, AC-2).
+    if (state === null) return status(issue, cwd, env, options.json);
+    const effective = effectiveState(p, state);
+    if (ACTION_STATUSES.includes(effective.status)) return status(issue, cwd, env, options.json);
+    // A dead supervisor ends the wait, except while the operator paused it deliberately (AC-4).
+    if (effective.status !== "paused" && lockHolder(p) === null) return status(issue, cwd, env, options.json);
+    if (deadline !== null && Date.now() >= deadline) {
+      return fail(`still ${effective.status} after ${options.timeoutSeconds} s. Next: gdt wait ${issue}\n`);
+    }
+    sleepSync(WAIT_POLL_MS);
+  }
 }
