@@ -7,6 +7,8 @@ import type { Finding } from "./finding.js";
 export const AGENTS = ["claude", "codex", "opencode", "mcode", "pi", "omp"] as const;
 export const ROLES = ["developer", "tester", "reviewer"] as const;
 export const TERMINALS = ["herdr", "headless"] as const;
+/** AC-2: how the herdr backend places the managed panes. */
+export const HERDR_LAYOUTS = ["split", "tabs"] as const;
 
 export const CONFIG_PATH = ".gdt/config.toml";
 export const LOCAL_CONFIG_PATH = ".gdt/config.local.toml";
@@ -16,6 +18,7 @@ export const DEFAULT_MAX_ACCEPTANCE_CRITERIA = 8;
 
 export type Agent = (typeof AGENTS)[number];
 export type Role = (typeof ROLES)[number];
+export type HerdrLayout = (typeof HERDR_LAYOUTS)[number];
 
 /** The test agent: runs `script` instead of a coding agent. Only accepted when GDT_TEST_AGENTS=1. */
 export const TEST_AGENT = "fake";
@@ -52,6 +55,8 @@ function configSchemaFor(testAgents: boolean) {
       allow_no_required_checks: z.boolean().default(false),
       terminal: z.enum(TERMINALS).default("herdr"),
       supervisor_pane: z.boolean().default(false),
+      // AC-2: `split` (the default) keeps the existing layout; `tabs` gives each pane its own tab.
+      herdr_layout: z.enum(HERDR_LAYOUTS).default("split"),
       poll_seconds: z.number().positive().default(30),
       handoff_checks: z.int().min(1).default(5),
     }),

@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { type Role, ROLES } from "../config.js";
+import { type HerdrLayout, type Role, ROLES } from "../config.js";
 import { which } from "../doctor.js";
 import { alive, writeJsonAtomic } from "../state.js";
 import type { AgentState, Backend } from "./backend.js";
@@ -36,6 +36,8 @@ export interface HerdrOptions {
   agents: Record<Role, string>;
   /** AC-1: when false, no supervisor pane is created; the supervisor runs detached to its log. */
   supervisorPane: boolean;
+  /** AC-3/AC-4: `split` (default) keeps every pane in one tab; `tabs` gives each pane its own tab. */
+  layout: HerdrLayout;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -81,6 +83,20 @@ function reportAgent(opts: HerdrOptions, paneId: string, label: string, state: A
   }
 }
 
+/**
+ * AC-1: sets the display-only agent label of a pane. herdr 0.9.1 requires the pane id before the
+ * options here (`herdr pane report-metadata <pane> --source gdt --display-agent <label>`); with the
+ * options first it exits 2 with `unknown option: gdt`.
+ */
+function reportDisplayAgent(opts: HerdrOptions, paneId: string, label: string): void {
+  const args = ["pane", "report-metadata", paneId, "--source", "gdt", "--display-agent", label];
+  const result = spawnSync(bin(opts.env), args, { cwd: opts.root, env: opts.env, encoding: "utf8" });
+  if (result.status !== 0) {
+    const reason = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `herdr exited with ${result.status ?? result.signal}`;
+    throw new Error(`herdr pane report-metadata: ${reason}`);
+  }
+}
+
 /** Parses the `{ "result": ... }` envelope; a herdr `error` becomes a thrown Error. */
 function resultOf(out: string, command: string): Record<string, unknown> {
   let data: unknown;
@@ -102,11 +118,76 @@ function workspaceList(opts: HerdrOptions): { workspace_id: string; label?: stri
   return list.filter((w): w is { workspace_id: string; label?: string } => isRecord(w) && typeof w.workspace_id === "string");
 }
 
-function paneIds(opts: HerdrOptions, workspaceId: string): string[] {
+interface PaneLocation {
+  pane_id: string;
+  tab_id?: string;
+}
+
+/** `pane list --workspace`, with the tab each pane currently lives in. */
+function paneLocations(opts: HerdrOptions, workspaceId: string): PaneLocation[] {
   const result = resultOf(call(["pane", "list", "--workspace", workspaceId], opts), "pane list");
   const list = result.panes;
   if (!Array.isArray(list)) return [];
-  return list.flatMap((p) => (isRecord(p) && typeof p.pane_id === "string" ? [p.pane_id] : []));
+  return list.flatMap((p) =>
+    isRecord(p) && typeof p.pane_id === "string"
+      ? [{ pane_id: p.pane_id, ...(typeof p.tab_id === "string" ? { tab_id: p.tab_id } : {}) }]
+      : [],
+  );
+}
+
+interface TabLocation {
+  tab_id: string;
+  label: string;
+  pane_count: number;
+}
+
+/** `tab list --workspace`, in herdr's order. */
+function tabLocations(opts: HerdrOptions, workspaceId: string): TabLocation[] {
+  const result = resultOf(call(["tab", "list", "--workspace", workspaceId], opts), "tab list");
+  const list = result.tabs;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((tab) =>
+    isRecord(tab) && typeof tab.tab_id === "string"
+      ? [
+          {
+            tab_id: tab.tab_id,
+            label: typeof tab.label === "string" ? tab.label : "",
+            pane_count: typeof tab.pane_count === "number" ? tab.pane_count : 0,
+          },
+        ]
+      : [],
+  );
+}
+
+/** AC-3: creates a tab labelled with a pane name; its root pane becomes the managed pane. */
+function createTab(opts: HerdrOptions, workspaceId: string, label: string): string {
+  const args = ["tab", "create", "--workspace", workspaceId, "--cwd", opts.root, "--label", label, "--no-focus"];
+  const result = resultOf(call(args, opts), "tab create");
+  const pane = result.root_pane;
+  if (!isRecord(pane) || typeof pane.pane_id !== "string") throw new Error("herdr tab create did not return a root pane");
+  return pane.pane_id;
+}
+
+/** AC-5: moves an existing pane into a tab of its own, labelled with the pane name. */
+function movePaneToNewTab(opts: HerdrOptions, pane: string, label: string): void {
+  call(["pane", "move", pane, "--new-tab", "--label", label, "--no-focus"], opts);
+}
+
+/** AC-5: moves an existing pane next to `anchor` in `tab`, keeping `ratio` of the anchor's width. */
+function movePaneIntoTab(opts: HerdrOptions, pane: string, tab: string, anchor: string, ratio: number): void {
+  const args = ["pane", "move", pane, "--tab", tab, "--split", "right", "--target-pane", anchor, "--ratio", ratio.toFixed(4), "--no-focus"];
+  call(args, opts);
+}
+
+function renameTab(opts: HerdrOptions, tab: string, label: string): void {
+  call(["tab", "rename", tab, label], opts);
+}
+
+/** AC-5: a tab that lost its last pane during a move must not remain. */
+function closeEmptyTabs(opts: HerdrOptions, workspaceId: string, keep: ReadonlySet<string>): void {
+  for (const tab of tabLocations(opts, workspaceId)) {
+    if (tab.pane_count === 0 && !keep.has(tab.tab_id)) call(["tab", "close", tab.tab_id], opts);
+  }
 }
 
 function createWorkspace(opts: HerdrOptions): { workspace_id: string; root_pane: string } {
@@ -149,6 +230,69 @@ function roleTitle(role: PaneName, agent: string, state: string): string {
 }
 
 /**
+ * AC-4/AC-5: all managed panes in one tab, left to right in `names` order. This is a no-op when the
+ * panes already share a tab, so a workspace created in split layout is left exactly as before.
+ */
+function arrangeSplit(
+  opts: HerdrOptions,
+  workspaceId: string,
+  names: readonly PaneName[],
+  mapping: PaneState["panes"],
+  paneTab: ReadonlyMap<string, string>,
+): void {
+  const paneOf = (name: PaneName): string | undefined => mapping[name]?.pane_id;
+  const first = names[0];
+  if (first === undefined) return;
+  const targetPane = paneOf(first);
+  if (targetPane === undefined) return;
+
+  const tabs = new Set(names.flatMap((name) => {
+    const pane = paneOf(name);
+    if (pane === undefined) return [];
+    const tab = paneTab.get(pane);
+    return tab === undefined ? [] : [tab];
+  }));
+  if (tabs.size <= 1) return;
+  const target = paneTab.get(targetPane);
+  if (target === undefined) return;
+
+  let anchor = targetPane;
+  names.slice(1).forEach((name, index) => {
+    const pane = paneOf(name);
+    if (pane === undefined) return;
+    if (paneTab.get(pane) !== target) movePaneIntoTab(opts, pane, target, anchor, 1 / (names.length - (index + 1) + 1));
+    anchor = pane;
+  });
+}
+
+/** AC-3/AC-5: one tab per managed pane, labelled with the pane name, in `names` order. */
+function arrangeTabs(opts: HerdrOptions, workspaceId: string, names: readonly PaneName[], mapping: PaneState["panes"]): void {
+  const tabByPane = new Map<string, string>();
+  const countByTab = new Map<string, number>();
+  for (const pane of paneLocations(opts, workspaceId)) {
+    if (pane.tab_id === undefined) continue;
+    tabByPane.set(pane.pane_id, pane.tab_id);
+    countByTab.set(pane.tab_id, (countByTab.get(pane.tab_id) ?? 0) + 1);
+  }
+  const labels = new Map(tabLocations(opts, workspaceId).map((tab) => [tab.tab_id, tab.label]));
+
+  const kept = new Set<string>();
+  for (const name of names) {
+    const pane = mapping[name]?.pane_id;
+    if (pane === undefined) continue;
+    const tab = tabByPane.get(pane);
+    // Keep a pane that is already alone in a tab of its own; only relabel that tab when needed.
+    if (tab !== undefined && !kept.has(tab) && countByTab.get(tab) === 1) {
+      kept.add(tab);
+      if (labels.get(tab) !== name) renameTab(opts, tab, name);
+      continue;
+    }
+    movePaneToNewTab(opts, pane, name);
+  }
+  closeEmptyTabs(opts, workspaceId, kept);
+}
+
+/**
  * One herdr workspace per issue, with four panes for supervisor, developer, tester and reviewer.
  * Panes are reused across `start` calls; their ids live in `panes.json` so a restarted process can
  * find them. Verified against herdr 0.9.1 in the default session.
@@ -185,7 +329,10 @@ export function herdr(opts: HerdrOptions): Backend {
         else workspaceId = createWorkspace(opts).workspace_id;
       }
 
-      const live = new Set(paneIds(opts, workspaceId));
+      const locations = paneLocations(opts, workspaceId);
+      const live = new Set(locations.map((pane) => pane.pane_id));
+      const paneTab = new Map<string, string>();
+      for (const pane of locations) if (pane.tab_id !== undefined) paneTab.set(pane.pane_id, pane.tab_id);
 
       // AC-4: a supervisor pane from an earlier run (while `supervisor_pane` was true) is closed; its
       // entry never enters the new panes.json, so no role can adopt the pane.
@@ -194,6 +341,7 @@ export function herdr(opts: HerdrOptions): Backend {
         if (leftover !== undefined && live.has(leftover.pane_id)) {
           call(["pane", "close", leftover.pane_id], opts);
           live.delete(leftover.pane_id);
+          paneTab.delete(leftover.pane_id);
         }
       }
 
@@ -214,22 +362,36 @@ export function herdr(opts: HerdrOptions): Backend {
         }
       }
 
-      // Each new pane is split off the right of the previous one, so panes run left to right in
-      // `names` order. The anchor keeps 1/(panes still to fill), which makes a new workspace's panes
-      // equally wide.
-      const first = Object.values(mapping).flatMap((p) => (p === undefined ? [] : [p.pane_id])).find((id) => id !== "");
-      let previous: string | undefined;
-      names.forEach((name, index) => {
-        const record = mapping[name];
-        if (record !== undefined) {
-          previous = record.pane_id;
-          return;
+      // Provide a pane for every name that still lacks one, in `names` order.
+      if (opts.layout === "tabs") {
+        // AC-3: each missing pane gets its own tab, labelled with the pane name.
+        for (const name of names) {
+          if (mapping[name] === undefined) mapping[name] = { pane_id: createTab(opts, workspaceId, name) };
         }
-        const anchor = previous ?? first;
-        if (anchor === undefined) throw new Error(`herdr workspace ${workspaceId} has no pane to split`);
-        previous = splitPane(opts, anchor, 1 / (names.length - index + 1));
-        mapping[name] = { pane_id: previous };
-      });
+      } else {
+        // AC-4: each new pane is split off the right of the previous one, so panes run left to right
+        // in `names` order. The anchor keeps 1/(panes still to fill), which makes a new workspace's
+        // panes equally wide.
+        const first = Object.values(mapping).flatMap((p) => (p === undefined ? [] : [p.pane_id])).find((id) => id !== "");
+        let previous: string | undefined;
+        names.forEach((name, index) => {
+          const record = mapping[name];
+          if (record !== undefined) {
+            previous = record.pane_id;
+            return;
+          }
+          const anchor = previous ?? first;
+          if (anchor === undefined) throw new Error(`herdr workspace ${workspaceId} has no pane to split`);
+          previous = splitPane(opts, anchor, 1 / (names.length - index + 1));
+          mapping[name] = { pane_id: previous };
+          const anchorTab = paneTab.get(anchor);
+          if (anchorTab !== undefined) paneTab.set(previous, anchorTab);
+        });
+      }
+
+      // AC-3/AC-5: place the panes according to the configured layout.
+      if (opts.layout === "tabs") arrangeTabs(opts, workspaceId, names, mapping);
+      else arrangeSplit(opts, workspaceId, names, mapping, paneTab);
 
       writePanes(opts.panesFile, { workspace_id: workspaceId, panes: mapping });
       if (opts.supervisorPane) rename("supervisor", roleTitle("supervisor", "", "starting"));
@@ -262,6 +424,14 @@ export function herdr(opts: HerdrOptions): Backend {
       // AC-6: without a supervisor pane there is no title to set for the supervisor.
       if (name === "supervisor" && !opts.supervisorPane) return;
       rename(name as PaneName, title);
+    },
+
+    setDisplayAgent(name, label) {
+      // Without a supervisor pane there is no supervisor label to set.
+      if (name === "supervisor" && !opts.supervisorPane) return;
+      const paneId = findPane(name as PaneName);
+      if (paneId === null) return;
+      reportDisplayAgent(opts, paneId, label);
     },
 
     reportState(name, state) {
