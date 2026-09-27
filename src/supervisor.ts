@@ -280,6 +280,7 @@ class Supervisor {
       this.setStatus("blocked", `${decision.role} already ran for this dispatch without a usable record`, {
         role: decision.role,
         round: decision.round,
+        blocked_key: key,
       });
       return "continue";
     }

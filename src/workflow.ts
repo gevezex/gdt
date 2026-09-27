@@ -180,7 +180,7 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
   }
 
   stopProcesses(p, state, env);
-  const key = state.inflight?.key;
+  const key = state.inflight?.key ?? state.blocked_key ?? undefined;
   if (key !== undefined) {
     rmSync(p.started(key), { force: true });
     rmSync(p.result(key), { force: true });
@@ -191,6 +191,7 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
     reason: "",
     exit_code: null,
     inflight: null,
+    blocked_key: null,
     pids: { supervisor: null, workers: {} },
   });
   writeState(p, state);
