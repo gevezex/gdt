@@ -208,7 +208,8 @@ function blockedHint(issue: number, reason: string): string {
 export function describe(state: State, supervisorAlive: boolean): { line: string; next: string } {
   const n = state.issue;
   if (state.status === "paused") return { line: "paused", next: `gdt resume ${n}` };
-  const active = !["stopped", "failed"].includes(state.status);
+  // In herdr mode the supervisor exits after `ready_to_merge`; merging needs no live supervisor.
+  const active = !["stopped", "failed", "ready_to_merge"].includes(state.status);
   if (active && !supervisorAlive) return { line: `supervisor not running (last status: ${state.status})`, next: `gdt start ${n}` };
   const withReason = state.reason === "" ? state.status : `${state.status}: ${state.reason}`;
   switch (state.status) {
