@@ -10,6 +10,26 @@ import type { Dispatch, TurnResult } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
 
+/** The clear-screen sequence: it erases the visible screen and keeps the scrollback (AC-1). */
+export const CLEAR_SCREEN = "\x1b[2J";
+/** Resets colours, so the agent's output follows in normal colours (AC-3). */
+export const RESET_COLOURS = "\x1b[0m";
+/** SGR 2, dim; the waiting line uses it (AC-2). */
+export const DIM = "\x1b[2m";
+
+/** The last finished turn of this worker, as shown in a waiting pane. */
+export interface LastTurn {
+  state: "DONE" | "FAILED";
+  at: Date;
+}
+
+/** AC-2: the one dim line a waiting role pane shows. */
+export function waitingLine(role: Role, last: LastTurn | undefined): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const detail = last === undefined ? "no turn yet" : `last turn ${last.state} ${pad(last.at.getHours())}:${pad(last.at.getMinutes())}`;
+  return `${DIM}${role} waiting · ${detail}${RESET_COLOURS}`;
+}
+
 /** The command for one unattended turn: the role's agent adapter, or the test agent's script. */
 export function invocation(roleName: Role, role: ResolvedRole, root: string, promptFile: string, env: Env): Invocation {
   if (role.agent === TEST_AGENT) {
@@ -104,12 +124,15 @@ export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<n
   });
 }
 
-async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: ReturnType<typeof paths>): Promise<void> {
-  const finish = (exit_code: number | null, violation?: string) => {
+async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: ReturnType<typeof paths>): Promise<LastTurn> {
+  let outcome: LastTurn = { state: "FAILED", at: new Date() };
+  const finish = (exit_code: number | null, violation?: string): LastTurn => {
     const result: TurnResult = { key: dispatch.key, exit_code, finished_at: new Date().toISOString() };
     if (violation !== undefined) result.violation = violation;
     writeJsonAtomic(p.result(dispatch.key), result);
+    outcome = { state: exit_code === 0 ? "DONE" : "FAILED", at: new Date() };
     log(`turn ${dispatch.key} finished with exit code ${exit_code}`);
+    return outcome;
   };
 
   const started = p.started(dispatch.key);
@@ -119,23 +142,20 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     writeFileSync(started, `${process.pid}\n`, { flag: "wx" });
   } catch {
     // Started before but never finished: the earlier run was interrupted. Never run it again.
-    finish(null);
-    return;
+    return finish(null);
   }
 
   const { report } = loadConfig(root, env);
   if (!report.valid) {
     log("invalid config; run gdt doctor");
-    finish(78);
-    return;
+    return finish(78);
   }
   const promptFile = p.prompt(dispatch.key);
   try {
     writeFileSync(promptFile, buildPrompt(role, dispatch, { root, extraRules: report.contract.extra_rules }));
   } catch (err) {
     log(`cannot build the prompt: ${err instanceof Error ? err.message : String(err)}`);
-    finish(78);
-    return;
+    return finish(78);
   }
 
   // A `gdt set-agent` override wins over `.gdt/config.toml` for this role from this turn on.
@@ -147,8 +167,7 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     inv = invocation(role, roleConfig, root, promptFile, env);
   } catch (err) {
     log(err instanceof Error ? err.message : String(err));
-    finish(127);
-    return;
+    return finish(127);
   }
 
   log(`turn ${dispatch.key}: ${inv.argv.join(" ")}`);
@@ -167,7 +186,7 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
   const exitCode = await runInvocation(inv, root, turnEnv);
   const violation = boundaryViolation(role, before, root, env);
   if (violation !== undefined) log(violation);
-  finish(exitCode, violation);
+  return finish(exitCode, violation);
 }
 
 /** Waits for dispatches for `role` without a model and runs one agent turn per dispatch key. */
@@ -182,6 +201,17 @@ export async function work(root: string, issue: number, role: Role, env: Env): P
   // In headless mode the workers keep waiting after ready_to_merge, as the supervisor does.
   const { report } = loadConfig(root, env);
   const herdr = report.valid && report.workflow.terminal === "herdr";
+  /** AC-1/AC-2: clears the pane and shows the dim waiting line; only herdr panes get escapes (AC-7). */
+  const showWaiting = (last: LastTurn | undefined): void => {
+    if (herdr) process.stdout.write(`${CLEAR_SCREEN}${waitingLine(role, last)}\n`);
+  };
+  /** The last turn of this role, so a restarted worker names it instead of claiming none ran. */
+  const finished = (dispatch: Dispatch | null): LastTurn | undefined => {
+    const result = dispatch === null ? null : readJson<TurnResult>(p.result(dispatch.key));
+    return result === null ? undefined : { state: result.exit_code === 0 ? "DONE" : "FAILED", at: new Date(result.finished_at) };
+  };
+  let last = finished(readJson<Dispatch>(p.dispatch(role)));
+  showWaiting(last);
   for (;;) {
     const state = readState(p);
     // AC-7: the workflow is done; the final line explains that this pane can be closed.
@@ -198,7 +228,12 @@ export async function work(root: string, issue: number, role: Role, env: Env): P
       return 0;
     }
     const dispatch = readJson<Dispatch>(p.dispatch(role));
-    if (dispatch !== null && !existsSync(p.result(dispatch.key))) await turn(root, role, dispatch, env, p);
+    if (dispatch !== null && !existsSync(p.result(dispatch.key))) {
+      // AC-3: a starting turn clears the pane and resets colours before the agent's output.
+      if (herdr) process.stdout.write(`${CLEAR_SCREEN}${RESET_COLOURS}`);
+      last = await turn(root, role, dispatch, env, p);
+      showWaiting(last);
+    }
     await sleep(250);
   }
 }

@@ -84,6 +84,8 @@ export interface Options {
   pr?: boolean;
   notifier?: boolean;
   terminal?: "headless" | "herdr";
+  /** Makes the fake herdr's `pane report-agent` exit non-zero (AC-6). */
+  reportFail?: boolean;
   extraFiles?: Record<string, string>;
 }
 
@@ -137,7 +139,9 @@ export function world(options: Options = {}): World {
       comments: {},
     }),
   );
-  const w = { root, bin, github, env: { PATH: bin, HOME: root, GDT_TEST_AGENTS: "1" } };
+  const env: Record<string, string> = { PATH: bin, HOME: root, GDT_TEST_AGENTS: "1" };
+  if (options.reportFail ?? false) env.FAKE_HERDR_REPORT_FAIL = "1";
+  const w = { root, bin, github, env };
   worlds.push(w);
   return w;
 }
@@ -216,6 +220,10 @@ export interface HerdrPane {
   /** Left edge and width as fractions of the tab width. */
   x: number;
   width: number;
+  /** Set by `pane report-agent`; `unknown` until gdt reports a state. */
+  agent_status?: string;
+  agent?: string;
+  agent_source?: string;
 }
 
 interface HerdrState {
@@ -246,6 +254,12 @@ export function herdrPaneIds(w: World): Record<string, string> {
 export function herdrTitle(w: World, name: string): string {
   const paneId = herdrPaneIds(w)[name];
   return paneId === undefined ? "" : (herdrState(w).panes[paneId]?.label ?? "");
+}
+
+/** The agent state gdt last reported for the named pane. */
+export function herdrAgentStatus(w: World, name: string): string {
+  const paneId = herdrPaneIds(w)[name];
+  return paneId === undefined ? "" : (herdrState(w).panes[paneId]?.agent_status ?? "");
 }
 
 /** The panes of the fake herdr tab from left to right, with their width as a fraction of the tab. */

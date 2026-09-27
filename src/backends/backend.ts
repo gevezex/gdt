@@ -1,3 +1,6 @@
+/** The agent lifecycle states gdt reports to herdr; display only, never read back. */
+export type AgentState = "idle" | "working" | "blocked";
+
 /**
  * Terminal backend interface (design 9.6). A pane is a named slot that runs one gdt process and shows
  * a title; panes outlive the process that created them. A handle is the gdt process id.
@@ -9,6 +12,8 @@ export interface Backend {
   spawnPane(name: string, argv: readonly string[]): number;
   /** Sets the visible title of the named pane; a no-op for backends without titles. */
   setTitle(name: string, title: string): void;
+  /** Reports the pane's agent lifecycle state; a no-op for backends without agent state. */
+  reportState(name: string, state: AgentState): void;
   alive(handle: number): boolean;
   /** Stops the pane's gdt process, keeping the pane itself. */
   close(handle: number): void;

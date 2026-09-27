@@ -81,7 +81,39 @@ function paneIdsIn(state, workspaceId) {
 }
 
 function paneInfo(pane) {
-  return { pane_id: pane.pane_id, workspace_id: pane.workspace_id, tab_id: pane.tab_id, label: pane.label, cwd: pane.cwd };
+  return {
+    pane_id: pane.pane_id,
+    workspace_id: pane.workspace_id,
+    tab_id: pane.tab_id,
+    label: pane.label,
+    cwd: pane.cwd,
+    agent_status: pane.agent_status ?? "unknown",
+    agent: pane.agent,
+    agent_source: pane.agent_source,
+  };
+}
+
+// `pane report-agent` has the pane id as its only positional argument, among flag/value pairs.
+const REPORT_AGENT_FLAGS = new Set([
+  "--source",
+  "--agent",
+  "--state",
+  "--message",
+  "--seq",
+  "--agent-session-id",
+  "--agent-session-path",
+]);
+
+function reportAgentPaneArg(args) {
+  let paneArg;
+  for (let i = 2; i < args.length; i++) {
+    if (REPORT_AGENT_FLAGS.has(args[i])) {
+      i += 1;
+      continue;
+    }
+    paneArg = args[i];
+  }
+  return paneArg;
 }
 
 if (command === "--version") {
@@ -196,6 +228,17 @@ try {
       const lines = text.split("\n");
       const limit = Number(flag("--lines") ?? 80);
       process.stdout.write(`${lines.slice(-limit).join("\n")}\n`);
+      return undefined;
+    }
+
+    if (command === "pane" && args[1] === "report-agent") {
+      if (process.env.FAKE_HERDR_REPORT_FAIL) return fail("report_failed", "fake herdr: report-agent is disabled");
+      const paneId = reportAgentPaneArg(args);
+      const pane = state.panes[paneId];
+      if (pane === undefined) return fail("pane_not_found", `pane ${paneId} not found`);
+      pane.agent_status = flag("--state") ?? "unknown";
+      pane.agent = flag("--agent");
+      pane.agent_source = flag("--source");
       return undefined;
     }
 

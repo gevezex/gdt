@@ -39,6 +39,9 @@ export function headless(logs: string, cwd: string, env: Env): Backend {
     setTitle: () => {
       // Headless panes have no title.
     },
+    reportState: () => {
+      // AC-7: headless mode reports no agent state.
+    },
     alive: (pid) => alive(pid),
     attach: () => null,
     close(pid) {
