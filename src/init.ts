@@ -4,6 +4,7 @@ import { adapterFor, supportedAgents } from "./agents/index.js";
 import { type Agent, CONFIG_PATH, DEFAULT_LANGUAGE, type Role, ROLES } from "./config.js";
 import { herdrPreflight, which } from "./doctor.js";
 import { detectedChecks } from "./github.js";
+import { ROLE_RULES_DIR, roleRulesPath } from "./prompts.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -101,4 +102,24 @@ export function writeConfig(root: string, text: string): string | null {
   } catch (err) {
     return `Cannot write ${CONFIG_PATH}: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/**
+ * AC-4: creates each missing `.gdt/roles/<role>.md` as an empty file and returns its
+ * repository-relative path. An existing file is never touched, not even with `--force`.
+ */
+export function createRoleRulesFiles(root: string): string[] {
+  const created: string[] = [];
+  for (const role of ROLES) {
+    const path = roleRulesPath(root, role);
+    mkdirSync(dirname(path), { recursive: true });
+    try {
+      writeFileSync(path, "", { flag: "wx" });
+      created.push(`${ROLE_RULES_DIR}/${role}.md`);
+    } catch (err) {
+      // Exists already: leave it byte-for-byte unchanged.
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+  return created;
 }

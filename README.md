@@ -321,6 +321,23 @@ overrides (for example another model) and is not committed.
 | `contract.max_acceptance_criteria` | `8` | Maximum number of ACs per issue |
 | `contract.extra_rules` | none | File with project rules added to every role prompt |
 
+### Per-role rules
+
+Each workflow role can have supplementary rules of its own, in the target repository:
+
+| File | Role |
+|---|---|
+| `.gdt/roles/developer.md` | developer |
+| `.gdt/roles/tester.md` | tester |
+| `.gdt/roles/reviewer.md` | reviewer |
+
+When a file has content, gdt appends it to that role's prompt on every turn under a
+`## Role rules` heading, after `## Project rules` when `contract.extra_rules` sets one.
+An empty or missing file adds nothing and is not an error. This only adds: gdt's own role
+files in the package are never replaced, so the protocol stays intact. `gdt init` creates
+the three files empty so you can see where your rules go; commit them like
+`.gdt/config.toml`.
+
 How each agent CLI is invoked is documented in [docs/agents.md](docs/agents.md).
 
 ## Watching it: herdr or headless
