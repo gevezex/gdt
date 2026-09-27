@@ -335,7 +335,9 @@ export async function supervise(root: string, issue: number, env: Env): Promise<
   process.on("SIGTERM", () => {
     // AC-6: the pane's last output line explains how to resume.
     process.stdout.write(`gdt stopped. Resume with: gdt start ${issue}\n`);
-    release();
+    // The lock stays in place: `gdt stop`/`gdt retry` release it only after writing the final state.
+    // If this handler removed it first, a concurrent `gdt wait` could see the lock vanish while the
+    // state is still a waiting status and report a dead supervisor for a deliberate stop.
     process.exit(143);
   });
 

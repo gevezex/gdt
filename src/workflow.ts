@@ -135,12 +135,15 @@ function loadBackend(p: Paths, issue: number, env: Env): Backend {
   return report.valid ? backendFor(report, p.root, issue, env, p) : headless(p.logs, p.root, env);
 }
 
-/** Stops the supervisor, its workers and any running agent, and releases the lock. */
+/**
+ * Stops the supervisor, its workers and any running agent. It does not release the lock: the caller
+ * releases it after writing the final state, so `gdt wait` never sees the lock vanish while the state
+ * is still a waiting status (AC-4 would otherwise fire for a deliberate stop).
+ */
 export function stopProcesses(p: Paths, state: State, env: Env): void {
   const backend = loadBackend(p, state.issue, env);
   const pids = [lockHolder(p), state.pids.supervisor, ...ROLES.map((role) => state.pids.workers[role])];
   for (const pid of new Set(pids)) if (pid !== null && pid !== undefined && alive(pid)) backend.close(pid);
-  rmSync(p.lock, { force: true });
 }
 
 /** AC-6: after stopping, every herdr pane shows STOPPED; the gdt processes printed the last line. */
@@ -171,6 +174,8 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
   if (state.status === "failed") Object.assign(state, { pids: { supervisor: null, workers: {} } });
   else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
+  // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
+  rmSync(p.lock, { force: true });
   markStopped(p, issue, env);
   // The printed next step is exactly what `gdt status` reports after this command.
   return ok(`Stopped #${issue}. Next: ${describe(state, false).next}\n`);
@@ -208,6 +213,8 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
     pids: { supervisor: null, workers: {} },
   });
   writeState(p, state);
+  // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
+  rmSync(p.lock, { force: true });
   return ok(`Retry prepared for #${issue}. Next: ${describe(state, false).next}\n`);
 }
 

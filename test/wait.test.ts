@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { paths, writeState, type State } from "../src/state.js";
 import { EXAMPLE_CONFIG, fakePath, gdt, tempRepo } from "./helpers.js";
@@ -71,6 +71,34 @@ describe("AC-1: wait returns when the workflow reaches an action status", { time
     expect(Date.now() - changedAt).toBeLessThan(2000);
     expect(result.code).toBe(0);
     expect(result.stdout).toBe("stopped. Next: gdt start 12\n");
+  });
+
+  it("never reports the supervisor as gone while a deliberate stop is still settling", async () => {
+    const w = world({ developer: "/bin/sleep 60\n", handoffChecks: 10_000 });
+    expect(gdtWorld(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("running", () => stateOf(w).status === "running");
+
+    const lock = join(w.root, ".git/gdt/issue-12/supervisor.lock");
+    const stopRun = spawn(process.execPath, [CLI, "stop", "12"], { cwd: w.root, env: w.env });
+    const stopState: { code: number | null; exited: boolean } = { code: null, exited: false };
+    stopRun.on("exit", (value) => {
+      stopState.code = value;
+      stopState.exited = true;
+    });
+
+    // Sample while `gdt stop` runs: every moment the lock is absent, the state must already be an
+    // action status. Otherwise a concurrent `gdt wait` would mistake a deliberate stop for a dead
+    // supervisor (AC-4) and report "supervisor not running" instead of "stopped" (AC-1).
+    const actions = new Set<string>(ACTION_STATUSES);
+    const wrong: string[] = [];
+    while (!stopState.exited) {
+      if (!existsSync(lock)) wrong.push(stateOf(w).status);
+      await sleep(1);
+    }
+
+    expect(stopState.code).toBe(0);
+    expect(wrong.filter((status) => !actions.has(status))).toEqual([]);
+    expect(stateOf(w).status).toBe("stopped");
   });
 
   it("returns awaiting_human when the developer asks a question", async () => {
