@@ -34,6 +34,16 @@ describe("AC-1: upgrade note from 0.3 to 0.4", () => {
     expect(note).toContain("gdt init --force");
     expect(note).toContain("gdt doctor");
   });
+
+  it("gives a safe manual move and warns that the --force alternative replaces the repository config", () => {
+    const upgrading = section(readme(), "## Upgrading");
+    const note = collapsed(upgrading.slice(upgrading.indexOf("### From 0.3 to 0.4")));
+
+    expect(note).toMatch(/Move the three `\[roles\.\*\]` tables/);
+    expect(note).toMatch(/replaces `.gdt\/config\.toml` in the current checkout with freshly detected defaults/);
+    expect(note).toMatch(/custom repository settings there are lost/);
+    expect(note).toMatch(/manual move when you have changed/);
+  });
 });
 
 describe("AC-2: stale passages match 0.4", () => {
@@ -42,6 +52,15 @@ describe("AC-2: stale passages match 0.4", () => {
     expect(quickStart).toMatch(/### 1\. Set up the user config once per machine/);
     expect(quickStart).toMatch(/### 2\. Configure each target repository/);
     expect(quickStart).toContain("~/.config/gdt/config.toml");
+  });
+
+  it("says step 1 also configures that first checkout, so step 2 is for the other repositories", () => {
+    const quickStart = collapsed(section(readme(), "## Quick start", "## Workflow statuses"));
+
+    expect(quickStart).toMatch(/also creates that repository's `\.gdt\/config\.toml`/);
+    expect(quickStart).toMatch(/so that first repository is configured too/);
+    expect(quickStart).toMatch(/For every other repository you want gdt to work on/);
+    expect(quickStart).toMatch(/no role options: it reuses the roles from your user config/);
   });
 
   it("names the user, repository and local config in the Commands doctor row", () => {

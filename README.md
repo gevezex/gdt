@@ -211,18 +211,21 @@ gdt init --developer opencode/deepseek/deepseek-v4-flash \
 ```
 
 `gdt init` writes the roles to the user config (`~/.config/gdt/config.toml`, or
-`$XDG_CONFIG_HOME/gdt/config.toml`) and installs the operator skill. Without the
-three role options, it reuses the roles from your user config when they are all
-there; otherwise it only reports what it found (agents on `PATH`, the terminal,
-the detected CI checks) so your agent can discuss the roles with you first. It
-never overwrites an existing config without `--force`.
+`$XDG_CONFIG_HOME/gdt/config.toml`) and installs the operator skill. Run it from
+one of your checkouts: it also creates that repository's `.gdt/config.toml`, so
+that first repository is configured too. Without the three role options, it
+reuses the roles from your user config when they are all there; otherwise it
+only reports what it found (agents on `PATH`, the terminal, the detected CI
+checks) so your agent can discuss the roles with you first. It never overwrites
+an existing config without `--force`.
 
 ### 2. Configure each target repository
 
-In every repository you want gdt to work on, create `.gdt/config.toml` with
-`gdt init`, or commit a file based on
-[`examples/config.toml`](examples/config.toml). `gdt init` requires at least one
-required check unless you pass `--allow-no-required-checks`.
+For every other repository you want gdt to work on, create `.gdt/config.toml`
+with `gdt init` (no role options: it reuses the roles from your user config), or
+commit a file based on [`examples/config.toml`](examples/config.toml). `gdt init`
+requires at least one required check unless you pass
+`--allow-no-required-checks`.
 
 Then check your setup in that repository:
 
@@ -414,12 +417,18 @@ How each agent CLI is invoked is documented in [docs/agents.md](docs/agents.md).
 Since 0.4.0, `[roles.*]` in `.gdt/config.toml` is an error and `gdt start`
 refuses to run. Roles now live in the user config. To upgrade:
 
-1. Move the three role tables to the user config. Run `gdt init --force` with
-   the three role options (see [Quick start](#quick-start)) to write them to
-   `~/.config/gdt/config.toml`, or `$XDG_CONFIG_HOME/gdt/config.toml` when
+1. Move the three `[roles.*]` tables from `.gdt/config.toml` to the user config
+   at `~/.config/gdt/config.toml`, or `$XDG_CONFIG_HOME/gdt/config.toml` when
    `XDG_CONFIG_HOME` is set.
-2. Remove the `[roles.*]` tables from `.gdt/config.toml`.
+2. Remove the `[roles.*]` tables from `.gdt/config.toml`, so only the repository
+   settings (`[workflow]`, `[contract]`) remain.
 3. Run `gdt doctor` to check that the configuration is valid again.
+
+Instead of steps 1 and 2 you can run `gdt init --force` with the three role
+options (see [Quick start](#quick-start)). It writes the roles to the user
+config, but it also replaces `.gdt/config.toml` in the current checkout with
+freshly detected defaults, so any custom repository settings there are lost.
+Use the manual move when you have changed `[workflow]` or `[contract]`.
 
 ## Watching it: herdr or headless
 
