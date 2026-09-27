@@ -15,7 +15,7 @@ is the `workflow.terminal` in effect for that run: `headless` or `herdr`
 | #7 | 2026-09-26 | headless | opencode / claude / codex | 0 | blocked | operator fixed a flaky required check in the pull request and re-ran the review by hand | the reviewer's block could not be lifted after the fix, so the run was finished by hand ([#21](https://github.com/gevezex/gdt/issues/21)) |
 | #21 | 2026-09-26 | herdr | opencode / claude / codex | 0 | ready_to_merge | none | none |
 | #9 | 2026-09-27 | herdr | opencode / claude / codex | 0 | ready_to_merge | answered question Q1 (unattended mode for MCode, pi and omp) | none |
-| #10 | 2026-09-27 | herdr | opencode / claude / codex | 1 | ready_to_merge | none | after the herdr supervisor exited, `gdt status` pointed to `gdt start` instead of the merge ([#26](https://github.com/gevezex/gdt/issues/26)) |
+| #10 | 2026-09-27 | herdr | opencode / claude / codex | 1 | ready_to_merge | operator added this run record after the first `ready_to_merge`, which needed a new review; the operator had left the shared checkout on `main`, so the tester blocked and the operator restored the pull request head | after the herdr supervisor exited, `gdt status` pointed to `gdt start` instead of the merge ([#26](https://github.com/gevezex/gdt/issues/26)); `gdt retry` did not lift an already-ran block ([#28](https://github.com/gevezex/gdt/issues/28)) |
 
 ## Reading a record
 
