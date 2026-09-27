@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ADAPTERS, type Adapter, type Invocation } from "../src/agents/index.js";
-import type { DoctorReport } from "../src/doctor.js";
+import { type DoctorReport, unsupportedAgentFindings } from "../src/doctor.js";
 import { runInvocation } from "../src/worker.js";
 import { EXAMPLE_CONFIG, fakePath, gdt, tempRepo } from "./helpers.js";
 
@@ -28,7 +28,7 @@ function render(inv: Invocation): string {
   return inv.stdin === null ? argv : `${argv} < ${inv.stdin}`;
 }
 
-function adapter(name: "claude" | "codex" | "opencode"): Adapter {
+function adapter(name: "claude" | "codex" | "opencode" | "mcode" | "pi" | "omp"): Adapter {
   const found = ADAPTERS[name];
   if (found === undefined) throw new Error(`no adapter ${name}`);
   return found;
@@ -152,5 +152,120 @@ describe("AC-8: skill directories are known per adapter", () => {
   ] as const)("%s returns its documented directory", (name, title, dir) => {
     expect(adapter(name).skillDir()).toBe(dir);
     expect(section(title)).toContain(`Skill directory: \`${dir}\``);
+  });
+});
+
+// Issue #9: the second batch of adapters, MCode, pi and omp.
+
+describe("AC-1: MCode, pi and omp invocations are documented", () => {
+  it.each([
+    ["MCode", "mcode", "0.5.4"],
+    ["pi", "pi", "0.87.1"],
+    ["omp", "omp", "18.3.1"],
+  ])("documents %s", (title, binary, version) => {
+    const text = section(title);
+    expect(text).toContain(`Verified against: ${binary} ${version}`);
+    expect(text).toMatch(/```sh\n.+\n```/);
+    for (const label of ["Unattended:", "Model:", "Prompt:", "Permissions:", "Skill directory:"]) {
+      expect(text).toContain(label);
+    }
+  });
+});
+
+describe("AC-2: MCode adapter matches its verified invocation", () => {
+  it("builds the documented invocation", () => {
+    const inv = adapter("mcode").buildInvocation("developer", "minimax/MiniMax-M3", "/tmp/p.md", cwd);
+    expect(render(inv)).toBe(documented("MCode", { model: "minimax/MiniMax-M3", prompt: "/tmp/p.md", cwd }));
+    expect(inv).toMatchSnapshot();
+  });
+});
+
+describe("AC-3: pi adapter matches its verified invocation", () => {
+  it("builds the documented invocation", () => {
+    const inv = adapter("pi").buildInvocation("tester", "anthropic/claude-sonnet-4", "/tmp/p.md", cwd);
+    expect(render(inv)).toBe(documented("pi", { model: "anthropic/claude-sonnet-4", prompt: "/tmp/p.md", cwd }));
+    expect(inv).toMatchSnapshot();
+  });
+});
+
+describe("AC-4: omp adapter matches its verified invocation", () => {
+  it("builds the documented invocation", () => {
+    const inv = adapter("omp").buildInvocation("reviewer", "openai/gpt-5.2", "/tmp/p.md", cwd);
+    expect(render(inv)).toBe(documented("omp", { model: "openai/gpt-5.2", prompt: "/tmp/p.md", cwd }));
+    expect(inv).toMatchSnapshot();
+  });
+});
+
+describe("AC-5: an unsupported agent is rejected", () => {
+  // Fixture: the registry is the only definition of "supported", so removing an entry marks that
+  // agent unsupported for this run. No real agent among MCode, pi and omp is unsupported.
+  const config = EXAMPLE_CONFIG.replace('agent = "claude"', 'agent = "pi"');
+
+  function withoutPi<T>(run: () => T): T {
+    const saved = ADAPTERS.pi;
+    delete ADAPTERS.pi;
+    try {
+      return run();
+    } finally {
+      if (saved !== undefined) ADAPTERS.pi = saved;
+    }
+  }
+
+  it("doctor reports an error finding naming the role and agent", () => {
+    withoutPi(() => {
+      const { code, report } = doctor(config, ["opencode", "codex"]);
+      expect(report.findings).toContainEqual({
+        check: "roles.tester",
+        level: "error",
+        message: "roles.tester.agent: pi has no unattended mode; see docs/agents.md",
+        fix: "Set roles.tester.agent in .gdt/config.toml to an agent with an unattended mode",
+      });
+      expect(code).toBe(1);
+    });
+  });
+
+  it("start exits 1 and names the role and agent", () => {
+    withoutPi(() => {
+      const result = gdt(["start", "12"], tempRepo({ ".gdt/config.toml": config }), fakePath());
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("roles.tester.agent: pi has no unattended mode; see docs/agents.md");
+    });
+  });
+
+  it("is generic: any agent without an adapter is rejected, not only the known ones", () => {
+    expect(
+      unsupportedAgentFindings({
+        developer: { agent: "fixture" },
+        tester: { agent: "fixture" },
+        reviewer: { agent: "claude" },
+      }),
+    ).toEqual([
+      {
+        check: "roles.developer",
+        level: "error",
+        message: "roles.developer.agent: fixture has no unattended mode; see docs/agents.md",
+        fix: "Set roles.developer.agent in .gdt/config.toml to an agent with an unattended mode",
+      },
+      {
+        check: "roles.tester",
+        level: "error",
+        message: "roles.tester.agent: fixture has no unattended mode; see docs/agents.md",
+        fix: "Set roles.tester.agent in .gdt/config.toml to an agent with an unattended mode",
+      },
+    ]);
+  });
+});
+
+describe("AC-6: vendor and skill directory are documented per adapter", () => {
+  it.each([
+    ["mcode", "MCode", "minimax/MiniMax-M3", "minimax", "~/.minimax/skills/gdt"],
+    ["pi", "pi", "anthropic/claude-sonnet-4", "anthropic", "~/.pi/agent/skills/gdt"],
+    ["omp", "omp", "openai/gpt-5.2", "openai", "~/.omp/agent/skills/gdt"],
+  ] as const)("%s returns its documented vendor and skill directory", (name, title, model, vendor, dir) => {
+    expect(adapter(name).vendorOf(model)).toBe(vendor);
+    expect(adapter(name).skillDir()).toBe(dir);
+    const text = section(title);
+    expect(text).toContain(`Vendor: the prefix before \`/\` in the model id, for example \`${vendor}\``);
+    expect(text).toContain(`Skill directory: \`${dir}\``);
   });
 });

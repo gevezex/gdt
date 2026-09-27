@@ -20,9 +20,9 @@ worker writes under `.git/gdt/issue-<n>/runs/`, and `<cwd>` is the repository ro
 the command in `<cwd>`. `< <prompt-file>` means the prompt is fed on stdin. The prompt is never
 passed as a single argument, to stay within argument-length limits.
 
-All three run with their permission prompts disabled, because nobody is there to answer them. The role
-boundaries are enforced after each turn instead (design section 10). The agent's exit code is passed
-through unchanged. The supervisor treats any non-zero code as a failed turn.
+All of them run with their permission prompts disabled, because nobody is there to answer them. The
+role boundaries are enforced after each turn instead (design section 10). The agent's exit code is
+passed through unchanged. The supervisor treats any non-zero code as a failed turn.
 
 These invocations were checked against each CLI's `--help` output for the version named. Update the
 version line when you re-verify against a newer CLI.
@@ -75,3 +75,54 @@ opencode run --model <model> --auto --file <prompt-file> "Follow the instruction
 - Permissions: `--auto` auto-approves every permission that is not explicitly denied.
 - Vendor: the prefix before `/` in the model id, for example `deepseek`.
 - Skill directory: `~/.config/opencode/skills/gdt`
+
+## MCode
+
+Verified against: mcode 0.5.4
+
+```sh
+mcode exec --model <model> --cwd <cwd> --permission full --input - < <prompt-file>
+```
+
+- Unattended: `mcode exec` runs one prompt without starting the TUI.
+- Model: `--model <model>` in the form `provider/model`, for example `minimax/MiniMax-M3`.
+- Prompt: on stdin. `--input -` is the only accepted input source (`--input` rejects any other value)
+  and cannot be combined with a prompt argument.
+- Permissions: `--permission full` grants full access. The other policies are `smart`, `off` and
+  `ask`; `ask` needs the TUI or ACP, so it cannot run unattended.
+- Working root: `--cwd <cwd>`.
+- Vendor: the prefix before `/` in the model id, for example `minimax`.
+- Skill directory: `~/.minimax/skills/gdt`
+
+## pi
+
+Verified against: pi 0.87.1
+
+```sh
+pi --print --model <model> --no-session --no-approve < <prompt-file>
+```
+
+- Unattended: `--print` runs the prompt and exits after one turn.
+- Model: `--model <model>`, in the form `provider/id`, for example `anthropic/claude-sonnet-4`.
+- Prompt: on stdin. With no prompt argument, piped stdin becomes the initial message.
+- Permissions: pi asks for no tool approval. `--no-approve` ignores trust-gated project-local files,
+  so a non-interactive run never reaches the project-trust prompt.
+- Session: `--no-session` keeps the turn in memory and persists nothing.
+- Vendor: the prefix before `/` in the model id, for example `anthropic`.
+- Skill directory: `~/.pi/agent/skills/gdt`
+
+## omp
+
+Verified against: omp 18.3.1
+
+```sh
+omp --print --model <model> --no-session --auto-approve < <prompt-file>
+```
+
+- Unattended: `--print` runs the prompt and exits after one turn.
+- Model: `--model <model>`, in the form `provider/id`, for example `openai/gpt-5.2`.
+- Prompt: on stdin. With no prompt argument, piped stdin becomes the initial message.
+- Permissions: `--auto-approve` auto-approves every tool call.
+- Session: `--no-session` keeps the turn in memory and persists nothing.
+- Vendor: the prefix before `/` in the model id, for example `openai`.
+- Skill directory: `~/.omp/agent/skills/gdt`

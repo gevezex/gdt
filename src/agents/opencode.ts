@@ -1,4 +1,4 @@
-import type { Adapter } from "./adapter.js";
+import { type Adapter, vendorFromModel } from "./adapter.js";
 
 export const OPENCODE_MESSAGE = "Follow the instructions in the attached file.";
 
@@ -12,7 +12,6 @@ export const opencode: Adapter = {
     env: {},
     stdin: null,
   }),
-  // "deepseek/deepseek-v4-flash" -> "deepseek"; a model id without a provider is its own vendor.
-  vendorOf: (model) => model.split("/")[0] ?? model,
+  vendorOf: vendorFromModel,
   skillDir: () => "~/.config/opencode/skills/gdt",
 };
