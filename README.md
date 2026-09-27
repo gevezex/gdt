@@ -1,27 +1,37 @@
 # gdt
 
-**GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.**
+**A deterministic supervisor that takes a GitHub issue through develop → test → review, with a different model in each role.**
 
-> Status: early development (0.x), used daily on this repository (see
-> [docs/dogfooding.md](docs/dogfooding.md)). Background:
-> [docs/design.md](docs/design.md).
+gdt (GitHub Development and Test) is a supervisor that makes every GitHub issue
+follow the same path: **develop → test → review**. Each step is done by a
+separate agent role, and you ideally give each role a different model, so one
+model's blind spots don't end up in your code unchecked.
 
-gdt takes one GitHub issue and runs it through three independent agent roles
-until a single draft pull request is ready to merge, or until it needs your
-decision:
+When the tester or reviewer finds problems, the issue goes back to the
+developer, but only a limited number of times: 2 correction rounds by default,
+shared between tester and reviewer. After that gdt stops and asks you, so an
+issue can never bounce between the roles forever.
+
+**Built to avoid burning tokens.** GitHub is the shared record: the roles don't
+talk to each other or to a long-running chat session, they each leave a
+structured comment on the pull request, and the supervisor reads those. The
+supervisor itself is plain code, not a model, so waiting, polling and deciding
+whose turn it is cost no tokens; a model only runs during a role's turn. It
+also means the workflow survives when your chat session ends.
+
+gdt currently supports **Claude Code, Codex, OpenCode, MCode, pi and omp**, both
+for the roles and for the agent you drive gdt from; more harnesses are on the
+way. You can watch the roles work in [herdr](https://herdr.dev). gdt stops at a
+draft pull request that is ready to merge; **you always merge yourself**.
+
+![gdt in herdr: the developer, tester and reviewer roles working on one issue](docs/assets/gdt-animation.gif)
 
 - the **developer** implements the issue and opens a draft pull request;
 - the **tester** checks every acceptance criterion against the running code;
 - the **reviewer** reads the diff against the issue.
 
-A deterministic **supervisor** (plain code, no model) decides whose turn it is.
-Waiting, polling and deciding cost no model tokens; a model only runs during a
-role's turn. You drive gdt by talking to any coding agent (Claude Code, Codex,
-OpenCode, MCode, pi or omp) and can watch the roles work in
-[herdr](https://herdr.dev). **You always merge yourself**: gdt never merges,
-deploys or closes issues.
-
-![gdt in herdr: the developer, tester and reviewer roles working on one issue](docs/assets/gdt-animation.gif)
+More background in [docs/design.md](docs/design.md); how we use gdt on this
+repository itself is in [docs/dogfooding.md](docs/dogfooding.md).
 
 ## How it works
 
@@ -30,8 +40,8 @@ deploys or closes issues.
 ```text
  ┌──────────┐  "pick up issue 251     ┌──────────────────────┐
  │   you    │ ──────────────────────► │  operator agent      │  Claude Code, Codex,
- └──────────┘   with gdt"             │  (your chat session) │  OpenCode, ...
-      ▲                               └──────────┬───────────┘
+ └──────────┘   with gdt"             │  (your chat session) │  OpenCode, MCode,
+      ▲                               └──────────┬───────────┘  pi or omp
       │                                          │ gdt start 251   (returns at once)
       │                                          │ gdt wait 251    (background, 0 tokens)
       │                                          ▼
