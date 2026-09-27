@@ -153,6 +153,7 @@ max_correction_rounds = 2       # Round 0 = first delivery, then corrections
 required_checks = ["backend-tests", "frontend-checks"]
 allow_no_required_checks = false
 terminal = "herdr"              # "herdr" | "headless"
+supervisor_pane = false         # herdr: show a pane for the supervisor; default false
 
 [contract]
 max_acceptance_criteria = 8
@@ -359,9 +360,11 @@ Exact flags are verified against each CLI during implementation, not assumed.
 Interface: `ensure_workspace`, `spawn_pane(name, argv)`, `set_title`, `alive`,
 `close`.
 
-- **herdr**: one workspace per issue, panes for supervisor and three roles, via
-  the herdr CLI or socket API. herdr's own agent-state detection is display only;
-  it never feeds a decision.
+- **herdr**: one workspace per issue with one pane per role, via the herdr CLI or
+  socket API. With `workflow.supervisor_pane = true` the supervisor gets a pane as
+  well; by default (`false`) it runs detached with `logs/supervisor.log`, like the
+  headless backend, and a leftover supervisor pane is closed on `gdt start`.
+  herdr's own agent-state detection is display only; it never feeds a decision.
 - **headless**: detached processes with log files under `.git/gdt/issue-<n>/`.
   Used for tests, CI and machines without herdr.
 
@@ -372,8 +375,8 @@ when the calling operator itself is not running inside herdr.
 
 `notify.ts` with a small fallback chain: herdr (if it offers notifications),
 `terminal-notifier` or `osascript` on macOS, `notify-send` on Linux, otherwise a
-line in the supervisor pane. Sent on `awaiting_human`, `blocked`, failure and
-`ready_to_merge`.
+line in the supervisor log (or the supervisor pane when `supervisor_pane = true`).
+Sent on `awaiting_human`, `blocked`, failure and `ready_to_merge`.
 
 ### 9.8 Operator skill
 

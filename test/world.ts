@@ -84,12 +84,14 @@ export interface Options {
   pr?: boolean;
   notifier?: boolean;
   terminal?: "headless" | "herdr";
+  /** `workflow.supervisor_pane`; omitted when undefined, so the gdt default applies. */
+  supervisorPane?: boolean;
   /** Makes the fake herdr's `pane report-agent` exit non-zero (AC-6). */
   reportFail?: boolean;
   extraFiles?: Record<string, string>;
 }
 
-export function config(handoffChecks: number, terminal: "headless" | "herdr" = "headless"): string {
+export function config(handoffChecks: number, terminal: "headless" | "herdr" = "headless", supervisorPane?: boolean): string {
   const role = (name: string) => `[roles.${name}]\nagent = "fake"\nmodel = "none"\nscript = "scripts/${name}.sh"\n`;
   return [
     'language = "en"',
@@ -100,6 +102,7 @@ export function config(handoffChecks: number, terminal: "headless" | "herdr" = "
     "[workflow]",
     'required_checks = ["ci"]',
     `terminal = "${terminal}"`,
+    ...(supervisorPane === undefined ? [] : [`supervisor_pane = ${supervisorPane}`]),
     "poll_seconds = 0.1",
     `handoff_checks = ${handoffChecks}`,
     "",
@@ -108,7 +111,7 @@ export function config(handoffChecks: number, terminal: "headless" | "herdr" = "
 
 export function world(options: Options = {}): World {
   const root = tempRepo({
-    ".gdt/config.toml": config(options.handoffChecks ?? 5, options.terminal ?? "headless"),
+    ".gdt/config.toml": config(options.handoffChecks ?? 5, options.terminal ?? "headless", options.supervisorPane),
     "scripts/developer.sh": options.developer ?? "exit 0\n",
     "scripts/tester.sh": options.tester ?? "/bin/sleep 60\n",
     "scripts/reviewer.sh": "/bin/sleep 60\n",

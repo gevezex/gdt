@@ -13,7 +13,16 @@ export type { Backend } from "./backend.js";
 export function backendFor(config: ResolvedConfig, root: string, issue: number, env: Env, p: Paths): Backend {
   if (config.workflow.terminal === "herdr") {
     const agents = Object.fromEntries(ROLES.map((role) => [role, config.roles[role].agent])) as Record<Role, string>;
-    return herdr({ root, issue, env, panesFile: p.panes, pidDir: p.pids, agents });
+    return herdr({
+      root,
+      issue,
+      env,
+      panesFile: p.panes,
+      pidDir: p.pids,
+      logs: p.logs,
+      agents,
+      supervisorPane: config.workflow.supervisor_pane,
+    });
   }
   return headless(p.logs, root, env);
 }

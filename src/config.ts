@@ -51,6 +51,7 @@ function configSchemaFor(testAgents: boolean) {
       required_checks: z.array(z.string().min(1)),
       allow_no_required_checks: z.boolean().default(false),
       terminal: z.enum(TERMINALS).default("herdr"),
+      supervisor_pane: z.boolean().default(false),
       poll_seconds: z.number().positive().default(30),
       handoff_checks: z.int().min(1).default(5),
     }),

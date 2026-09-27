@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { type Role, ROLES } from "../config.js";
 import { which } from "../doctor.js";
@@ -8,9 +8,13 @@ import type { AgentState, Backend } from "./backend.js";
 
 type Env = Record<string, string | undefined>;
 
-/** The pane names this backend manages, in creation order. */
-const PANE_NAMES = ["supervisor", ...ROLES] as const;
-type PaneName = (typeof PANE_NAMES)[number];
+/** One pane name per visible pane; `supervisor` is present only when `workflow.supervisor_pane` is true. */
+type PaneName = "supervisor" | Role;
+
+/** The pane names this backend manages, in creation order (AC-2: without a supervisor pane, only roles). */
+function paneNames(opts: HerdrOptions): readonly PaneName[] {
+  return opts.supervisorPane ? ["supervisor", ...ROLES] : [...ROLES];
+}
 
 /** `.git/gdt/issue-<n>/panes.json`: the workspace and the pane id per name. */
 interface PaneState {
@@ -26,8 +30,12 @@ export interface HerdrOptions {
   panesFile: string;
   /** Directory that holds one pid file per pane. */
   pidDir: string;
+  /** Directory that holds `supervisor.log` when the supervisor runs without a pane (AC-3). */
+  logs: string;
   /** Role agent names, used in the pane titles. */
   agents: Record<Role, string>;
+  /** AC-1: when false, no supervisor pane is created; the supervisor runs detached to its log. */
+  supervisorPane: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -178,8 +186,20 @@ export function herdr(opts: HerdrOptions): Backend {
       }
 
       const live = new Set(paneIds(opts, workspaceId));
+
+      // AC-4: a supervisor pane from an earlier run (while `supervisor_pane` was true) is closed; its
+      // entry never enters the new panes.json, so no role can adopt the pane.
+      if (!opts.supervisorPane && known?.workspace_id === workspaceId) {
+        const leftover = known.panes.supervisor;
+        if (leftover !== undefined && live.has(leftover.pane_id)) {
+          call(["pane", "close", leftover.pane_id], opts);
+          live.delete(leftover.pane_id);
+        }
+      }
+
+      const names = paneNames(opts);
       const mapping: PaneState["panes"] = {};
-      for (const name of PANE_NAMES) {
+      for (const name of names) {
         const record = known?.workspace_id === workspaceId ? known.panes[name] : undefined;
         if (record !== undefined && live.has(record.pane_id)) mapping[name] = record;
       }
@@ -187,7 +207,7 @@ export function herdr(opts: HerdrOptions): Backend {
       // Adopt panes that a previous run left behind (for example after its panes.json was removed).
       const claimed = new Set(Object.values(mapping).flatMap((p) => (p === undefined ? [] : [p.pane_id])));
       const free = [...live].filter((id) => !claimed.has(id));
-      for (const name of PANE_NAMES) {
+      for (const name of names) {
         if (mapping[name] === undefined) {
           const reuse = free.shift();
           if (reuse !== undefined) mapping[name] = { pane_id: reuse };
@@ -195,11 +215,11 @@ export function herdr(opts: HerdrOptions): Backend {
       }
 
       // Each new pane is split off the right of the previous one, so panes run left to right in
-      // PANE_NAMES order. The anchor keeps 1/(panes still to fill), which makes a new workspace's
-      // panes equally wide.
+      // `names` order. The anchor keeps 1/(panes still to fill), which makes a new workspace's panes
+      // equally wide.
       const first = Object.values(mapping).flatMap((p) => (p === undefined ? [] : [p.pane_id])).find((id) => id !== "");
       let previous: string | undefined;
-      PANE_NAMES.forEach((name, index) => {
+      names.forEach((name, index) => {
         const record = mapping[name];
         if (record !== undefined) {
           previous = record.pane_id;
@@ -207,16 +227,18 @@ export function herdr(opts: HerdrOptions): Backend {
         }
         const anchor = previous ?? first;
         if (anchor === undefined) throw new Error(`herdr workspace ${workspaceId} has no pane to split`);
-        previous = splitPane(opts, anchor, 1 / (PANE_NAMES.length - index + 1));
+        previous = splitPane(opts, anchor, 1 / (names.length - index + 1));
         mapping[name] = { pane_id: previous };
       });
 
       writePanes(opts.panesFile, { workspace_id: workspaceId, panes: mapping });
-      rename("supervisor", roleTitle("supervisor", "", "starting"));
+      if (opts.supervisorPane) rename("supervisor", roleTitle("supervisor", "", "starting"));
       for (const role of ROLES) rename(role, roleTitle(role, opts.agents[role], "WAITING"));
     },
 
     spawnPane(name, argv) {
+      // AC-3: without a supervisor pane the supervisor is a detached process whose output is its log.
+      if (name === "supervisor" && !opts.supervisorPane) return spawnDetached(opts, "supervisor", argv);
       const state = readPanes(opts.panesFile);
       const paneId = state?.panes[name as PaneName]?.pane_id;
       if (state === null || paneId === undefined || paneId === "") throw new Error(`herdr: no pane named ${name}`);
@@ -236,9 +258,15 @@ export function herdr(opts: HerdrOptions): Backend {
       return pid;
     },
 
-    setTitle: (name, title) => rename(name as PaneName, title),
+    setTitle(name, title) {
+      // AC-6: without a supervisor pane there is no title to set for the supervisor.
+      if (name === "supervisor" && !opts.supervisorPane) return;
+      rename(name as PaneName, title);
+    },
 
     reportState(name, state) {
+      // AC-6: without a supervisor pane no supervisor state is reported to herdr.
+      if (name === "supervisor" && !opts.supervisorPane) return;
       const paneId = findPane(name as PaneName);
       if (paneId === null) throw new Error(`herdr: no pane named ${name}`);
       // AC-4/AC-5: the role's agent is the label, the supervisor reports as `gdt`.
@@ -268,6 +296,18 @@ export function herdr(opts: HerdrOptions): Backend {
       }
     },
   };
+}
+
+/** Starts `argv` detached with stdout and stderr in `logs/<name>.log`, like the headless backend. */
+function spawnDetached(opts: HerdrOptions, name: string, argv: readonly string[]): number {
+  const [command, ...args] = argv;
+  if (command === undefined) throw new Error("spawnPane: empty argv");
+  mkdirSync(opts.logs, { recursive: true });
+  const out = openSync(join(opts.logs, `${name}.log`), "a");
+  const child = spawn(command, args, { cwd: opts.root, env: opts.env, detached: true, stdio: ["ignore", out, out] });
+  child.unref();
+  if (child.pid === undefined) throw new Error(`could not start ${name}`);
+  return child.pid;
 }
 
 function waitForPid(file: string): number {
