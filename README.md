@@ -126,9 +126,9 @@ evidence too.
 
 ### Agent prerequisites
 
-Before the first `gdt start`, every agent CLI you name in `.gdt/config.toml` must
-already work on your machine with the exact model id you set there. For each
-role:
+Before the first `gdt start`, every agent CLI you name in the user config
+(`~/.config/gdt/config.toml`) must already work on your machine with the exact
+model id you set there. For each role:
 
 1. install the agent CLI,
 2. log in or configure its API key or subscription,
@@ -182,11 +182,14 @@ gdt init --developer opencode/deepseek/deepseek-v4-flash \
          --reviewer codex/gpt-5.6-luna
 ```
 
-`gdt init` writes the config, runs `gdt doctor` and installs the operator skill.
-Without the three role options it only reports what it found (agents on `PATH`,
-the terminal, the detected CI checks) so your agent can discuss the roles with
-you first. It never overwrites an existing config without `--force`, and it
-requires at least one required check unless you pass `--allow-no-required-checks`.
+`gdt init` writes the roles to your user config (`~/.config/gdt/config.toml`,
+or `$XDG_CONFIG_HOME/gdt/config.toml`), writes the project settings to
+`.gdt/config.toml`, runs `gdt doctor` and installs the operator skill. Without the
+three role options, it reuses the roles from your user config when they are all
+there; otherwise it only reports what it found (agents on `PATH`, the terminal,
+the detected CI checks) so your agent can discuss the roles with you first. It
+never overwrites an existing config without `--force`, and it requires at least
+one required check unless you pass `--allow-no-required-checks`.
 
 Then check your setup:
 
@@ -302,7 +305,7 @@ Every command supports `--help`; `status` and `wait` also support `--json`.
 
 | Command | Effect |
 |---|---|
-| `gdt init` | Create `.gdt/config.toml` and install the operator skill |
+| `gdt init` | Write the roles to the user config and `.gdt/config.toml`, install the operator skill |
 | `gdt doctor` | Check tools, GitHub login, agents, herdr and `.gdt/config.toml` |
 | `gdt check-issue <n>` | Validate an issue body against the contract |
 | `gdt start <n>` | Preflight, start the supervisor and workers, return |
@@ -319,23 +322,38 @@ Every command supports `--help`; `status` and `wait` also support `--json`.
 
 ## Configuration
 
-`.gdt/config.toml` is committed; `.gdt/config.local.toml` holds machine-local
-overrides (for example another model) and is not committed.
+Roles belong to a person, not to a repository, so gdt keeps them in a per-user
+config. gdt loads three files and merges them in this order, with the later file
+winning per key:
 
-| Key | Default | Meaning |
-|---|---|---|
-| `language` | `"en"` | Language of issue and PR text (`en`, `nl`) |
-| `roles.<role>.agent` | required | `claude`, `codex`, `opencode`, `mcode`, `pi` or `omp` |
-| `roles.<role>.model` | required | Model id for that agent |
-| `workflow.required_checks` | required | CI checks that must be green before `ready_to_merge` |
-| `workflow.allow_no_required_checks` | `false` | Allow an empty `required_checks` list |
-| `workflow.max_correction_rounds` | `2` | Correction rounds after round 0 |
-| `workflow.terminal` | `"herdr"` | `"herdr"` or `"headless"` |
-| `workflow.supervisor_pane` | `false` | herdr: also show the supervisor in a pane |
-| `workflow.herdr_layout` | `tabs` | herdr: `"tabs"` (one tab per pane) or `"split"` (panes side by side in one tab) |
-| `workflow.poll_seconds` | `30` | How often the supervisor reads GitHub |
-| `contract.max_acceptance_criteria` | `8` | Maximum number of ACs per issue |
-| `contract.extra_rules` | none | File with project rules added to every role prompt |
+1. the **user config** — `$XDG_CONFIG_HOME/gdt/config.toml`, or
+   `~/.config/gdt/config.toml` when `XDG_CONFIG_HOME` is not set. It holds only
+   `[roles.*]`. A relative `XDG_CONFIG_HOME` is ignored.
+2. the **repository config** — `.gdt/config.toml`, committed. It holds the project
+   settings and must not contain `[roles.*]`.
+3. the **local config** — `.gdt/config.local.toml`, never committed. It overrides
+   any key, for example one role's model on this machine.
+
+`gdt init` writes the roles to the user config and the project settings to
+`.gdt/config.toml`. Ready-made files are in [`examples/`](examples/):
+[`examples/user-config.toml`](examples/user-config.toml),
+[`examples/config.toml`](examples/config.toml) and
+[`examples/config.local.toml`](examples/config.local.toml).
+
+| Key | File | Default | Meaning |
+|---|---|---|---|
+| `roles.<role>.agent` | user | required | `claude`, `codex`, `opencode`, `mcode`, `pi` or `omp` |
+| `roles.<role>.model` | user | required | Model id for that agent |
+| `language` | repository | `"en"` | Language of issue and PR text (`en`, `nl`) |
+| `workflow.required_checks` | repository | required | CI checks that must be green before `ready_to_merge` |
+| `workflow.allow_no_required_checks` | repository | `false` | Allow an empty `required_checks` list |
+| `workflow.max_correction_rounds` | repository | `2` | Correction rounds after round 0 |
+| `workflow.terminal` | repository | `"herdr"` | `"herdr"` or `"headless"` |
+| `workflow.supervisor_pane` | repository | `false` | herdr: also show the supervisor in a pane |
+| `workflow.herdr_layout` | repository | `tabs` | herdr: `"tabs"` (one tab per pane) or `"split"` (panes side by side in one tab) |
+| `workflow.poll_seconds` | repository | `30` | How often the supervisor reads GitHub |
+| `contract.max_acceptance_criteria` | repository | `8` | Maximum number of ACs per issue |
+| `contract.extra_rules` | repository | none | File with project rules added to every role prompt |
 
 ### Per-role rules
 

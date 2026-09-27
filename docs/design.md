@@ -17,7 +17,7 @@ Goals:
 - **Low token use.** Waiting, polling and deciding cost zero model tokens. A model
   runs only when the supervisor dispatches a role turn.
 - **Agent-agnostic.** The operator and each role can be Claude Code, Codex,
-  OpenCode, MCode, pi or omp, configured per repository.
+  OpenCode, MCode, pi or omp, configured per user in the user config.
 - **Human in the loop without memorising commands.** The user talks to an agent;
   the agent drives gdt through a small, agent-friendly CLI.
 - **Fail closed.** When the supervisor cannot make a trustworthy decision, it
@@ -105,7 +105,7 @@ gdt/
   tsconfig.json
   src/
     cli.ts                  # subcommands, --json output, recovery hints
-    config.ts               # .gdt/config.toml loading and validation
+    config.ts               # user, repository and local config loading and validation
     contract.ts             # locale-aware issue-contract validator
     protocol.ts             # record markers, zod schemas, parsing
     decision.ts             # pure decision engine (no I/O)
@@ -129,36 +129,55 @@ gdt/
   docs/
 ```
 
-## 4. Configuration (per target repository)
+## 4. Configuration (user, per repository and local)
 
-One file, `.gdt/config.toml`, committed in the target repository:
+Roles belong to a person, not to a repository, so they live in a per-user config.
+gdt merges three files in this order, with the later one winning per key:
 
-```toml
-language = "nl"                 # language for human-facing GitHub text
+1. the **user config**, `$XDG_CONFIG_HOME/gdt/config.toml`, or
+   `$HOME/.config/gdt/config.toml` when `XDG_CONFIG_HOME` is unset (a relative
+   `XDG_CONFIG_HOME` is ignored). It holds only `[roles.*]`:
 
-[roles.developer]
-agent = "opencode"
-model = "deepseek/deepseek-v4-flash"
+   ```toml
+   [roles.developer]
+   agent = "opencode"
+   model = "deepseek/deepseek-v4-flash"
 
-[roles.tester]
-agent = "claude"
-model = "claude-sonnet-5"
+   [roles.tester]
+   agent = "claude"
+   model = "claude-sonnet-5"
 
-[roles.reviewer]
-agent = "codex"
-model = "gpt-5.6-luna"
+   [roles.reviewer]
+   agent = "codex"
+   model = "gpt-5.6-luna"
+   ```
 
-[workflow]
-max_correction_rounds = 2       # Round 0 = first delivery, then corrections
-required_checks = ["backend-tests", "frontend-checks"]
-allow_no_required_checks = false
-terminal = "herdr"              # "herdr" | "headless"
-supervisor_pane = false         # herdr: show a pane for the supervisor; default false
-herdr_layout = "tabs"           # herdr: "tabs" (one tab per pane, default) | "split" (one tab)
+   `gdt init` writes the roles here. `gdt doctor` shows this absolute path as each
+   role's source; a missing role names this path and the `gdt init` command.
+2. the **repository config**, `.gdt/config.toml`, committed in the target repository.
+   It holds the project settings and must not contain `[roles.*]`; a
+   `[roles.<role>]` table there is a `doctor` error whose fix points at the user
+   config or at `.gdt/config.local.toml`:
 
-[contract]
-max_acceptance_criteria = 8
-```
+   ```toml
+   language = "nl"                 # language for human-facing GitHub text
+
+   [workflow]
+   max_correction_rounds = 2       # Round 0 = first delivery, then corrections
+   required_checks = ["backend-tests", "frontend-checks"]
+   allow_no_required_checks = false
+   terminal = "herdr"              # "herdr" | "headless"
+   supervisor_pane = false         # herdr: show a pane for the supervisor; default false
+   herdr_layout = "tabs"           # herdr: "tabs" (one tab per pane, default) | "split" (one tab)
+
+   [contract]
+   max_acceptance_criteria = 8
+   ```
+3. the **local config**, `.gdt/config.local.toml`, not committed, which gdt adds to
+   `.git/info/exclude`. It overrides any key, for example one role's model on this
+   machine.
+
+Ready-made files for all three are in `examples/`.
 
 - The optional `contract.extra_rules` (for example `extra_rules = ".gdt/rules.md"`)
   points to project rules appended to role prompts. That is where project-specific
@@ -174,8 +193,6 @@ max_acceptance_criteria = 8
   `allow_no_required_checks = true`. An empty gate must never look like a green one.
 - `gdt doctor` warns when developer and tester use the same model vendor, because
   correlated blind spots weaken the tester's independence.
-- Local, uncommitted overrides (for example a different model on one machine) go
-  in `.gdt/config.local.toml`, which gdt adds to `.git/info/exclude`.
 
 Runtime state lives under `.git/gdt/issue-<n>/` and belongs to the supervisor
 only.

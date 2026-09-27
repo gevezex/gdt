@@ -1,7 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { adapterFor, supportedAgents } from "./agents/index.js";
-import { type Agent, CONFIG_PATH, DEFAULT_LANGUAGE, type Role, ROLES } from "./config.js";
+import { type Agent, CONFIG_PATH, DEFAULT_LANGUAGE, type Role, ROLES, userConfigPath } from "./config.js";
 import { herdrPreflight, which } from "./doctor.js";
 import { detectedChecks } from "./github.js";
 import { ROLE_RULES_DIR, roleRulesPath } from "./prompts.js";
@@ -69,27 +69,65 @@ export function parseRoleSpec(spec: string): RoleSpec | { error: string } {
   return { agent: agent as Agent, model };
 }
 
-export interface InitConfig {
-  roles: Record<Role, RoleSpec>;
+/** The project settings `gdt init` writes; roles live in the user config (AC-5). */
+export interface RepoConfig {
   language: string;
   terminal: Terminal;
   requiredChecks: string[];
   allowNoRequiredChecks: boolean;
 }
 
-/** The `.gdt/config.toml` text; a key that keeps its schema default is not written (AC-2). */
-export function serializeConfig(config: InitConfig): string {
+/** The `.gdt/config.toml` text without roles; a key that keeps its schema default is not written. */
+export function serializeConfig(config: RepoConfig): string {
   const lines: string[] = [];
   if (config.language !== DEFAULT_LANGUAGE) lines.push(`language = ${JSON.stringify(config.language)}`, "");
-  for (const role of ROLES) {
-    const { agent, model } = config.roles[role];
-    lines.push(`[roles.${role}]`, `agent = ${JSON.stringify(agent)}`, `model = ${JSON.stringify(model)}`, "");
-  }
   lines.push("[workflow]", `required_checks = [${config.requiredChecks.map((name) => JSON.stringify(name)).join(", ")}]`);
   if (config.allowNoRequiredChecks) lines.push("allow_no_required_checks = true");
   if (config.terminal !== "herdr") lines.push(`terminal = ${JSON.stringify(config.terminal)}`);
   lines.push("");
   return lines.join("\n");
+}
+
+function roleTable(role: Role, spec: RoleSpec): string {
+  return `[roles.${role}]\nagent = ${JSON.stringify(spec.agent)}\nmodel = ${JSON.stringify(spec.model)}\n`;
+}
+
+/** The user config text for `roles`, used when the file does not exist yet. */
+export function serializeUserConfig(roles: Record<Role, RoleSpec>): string {
+  return ROLES.map((role) => roleTable(role, roles[role])).join("\n");
+}
+
+const ROLE_HEADER = /^\[roles\.(developer|tester|reviewer)\]$/;
+
+/**
+ * AC-5: replaces only the `[roles.<role>]` tables of `existing`, keeping every other line
+ * (comments and other tables) byte-for-byte. The new tables are appended at the end.
+ */
+export function upsertRoles(existing: string, roles: Record<Role, RoleSpec>): string {
+  const kept: string[] = [];
+  let inRoleTable = false;
+  for (const line of existing.split("\n")) {
+    const header = /^\[[^\]]+\]/.exec(line.trim())?.[0];
+    if (header !== undefined) inRoleTable = ROLE_HEADER.test(header);
+    if (!inRoleTable) kept.push(line);
+  }
+  while (kept.length > 0 && (kept[kept.length - 1] ?? "").trim() === "") kept.pop();
+  const prefix = kept.length > 0 ? `${kept.join("\n")}\n\n` : "";
+  const blocks = ROLES.map((role) => roleTable(role, roles[role]).trimEnd()).join("\n\n");
+  return `${prefix}${blocks}\n`;
+}
+
+/** Writes the roles to the user config, creating its directory; returns an error message or null. */
+export function writeUserConfig(env: Env, roles: Record<Role, RoleSpec>): string | null {
+  const path = userConfigPath(env);
+  try {
+    const existing = existsSync(path) ? readFileSync(path, "utf8") : null;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, existing === null ? serializeUserConfig(roles) : upsertRoles(existing, roles));
+    return null;
+  } catch (err) {
+    return `Cannot write ${path}: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
 /** Writes the config, creating `.gdt/` when needed; returns an error message, or null on success. */

@@ -190,7 +190,7 @@ describe("AC-5: changing the layout rearranges existing panes on the next start"
 describe("AC-6: documentation names the setting and the role label", () => {
   it("the README configuration table lists workflow.herdr_layout with default tabs and both values", () => {
     const readme = readFileSync("README.md", "utf8");
-    expect(readme).toMatch(/\| `workflow\.herdr_layout` \| `tabs` \|/);
+    expect(readme).toMatch(/\| `workflow\.herdr_layout` \| repository \| `tabs` \|/);
     expect(readme).toContain('`"split"`');
     expect(readme).toContain('`"tabs"`');
   });

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,19 +17,8 @@ export function fakeHerdr(bin: string, version = "0.9.1"): void {
   chmodSync(join(bin, "herdr"), 0o755);
 }
 
+/** The project settings of a repository config; roles live in the user config (issue #51). */
 export const EXAMPLE_CONFIG = `language = "nl"                 # language for human-facing GitHub text
-
-[roles.developer]
-agent = "opencode"
-model = "deepseek/deepseek-v4-flash"
-
-[roles.tester]
-agent = "claude"
-model = "claude-sonnet-5"
-
-[roles.reviewer]
-agent = "codex"
-model = "gpt-5.6-luna"
 
 [workflow]
 max_correction_rounds = 2       # Round 0 = first delivery, then corrections
@@ -40,6 +29,30 @@ terminal = "herdr"              # "herdr" | "headless"
 [contract]
 max_acceptance_criteria = 8
 `;
+
+/** The three roles a user config may define. */
+export const EXAMPLE_USER_CONFIG = `[roles.developer]
+agent = "opencode"
+model = "deepseek/deepseek-v4-flash"
+
+[roles.tester]
+agent = "claude"
+model = "claude-sonnet-5"
+
+[roles.reviewer]
+agent = "codex"
+model = "gpt-5.6-luna"
+`;
+
+/** The user config path under `root` when `HOME` is `root` (the convention in these tests). */
+export const USER_CONFIG = join(".config", "gdt", "config.toml");
+
+/** Writes the user config under `root`, creating the directory; a test may pass a custom text. */
+export function writeUserConfig(root: string, text = EXAMPLE_USER_CONFIG): void {
+  const path = join(root, USER_CONFIG);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
 
 const found = which("git", process.env);
 if (found === null) throw new Error("tests need git on PATH");
@@ -97,6 +110,9 @@ export function tempRepo(files: Record<string, string> = {}): string {
 }
 
 export function gdt(argv: string[], cwd: string, path = fakePath()) {
+  // The shared helper keeps roles in the user config, under HOME (= cwd). `gdt init` tests set up
+  // their own user-config state, so they are left alone.
+  if (argv[0] !== "init" && !existsSync(join(cwd, USER_CONFIG))) writeUserConfig(cwd);
   let stdout = "";
   let stderr = "";
   const code = run(argv, {

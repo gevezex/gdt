@@ -1,0 +1,15 @@
+# User config: ~/.config/gdt/config.toml, or $XDG_CONFIG_HOME/gdt/config.toml when
+# XDG_CONFIG_HOME is an absolute path. One file for every repository. `gdt init` writes
+# it; a repository must not contain [roles.*] (use .gdt/config.local.toml for one clone).
+
+[roles.developer]
+agent = "opencode"                      # Agent CLI for the developer role (this file)
+model = "deepseek/deepseek-v4-flash"    # Model id for that CLI (this file)
+
+[roles.tester]
+agent = "claude"                        # Agent CLI for the tester role (this file)
+model = "claude-sonnet-5"               # Model id for that CLI (this file)
+
+[roles.reviewer]
+agent = "codex"                         # Agent CLI for the reviewer role (this file)
+model = "gpt-5.6-luna"                  # Model id for that CLI (this file)

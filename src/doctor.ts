@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { adapterFor } from "./agents/index.js";
-import { type ConfigReport, CONFIG_PATH, LOCAL_CONFIG_PATH, loadConfig, type ResolvedConfig, ROLES, TEST_AGENT, type Role } from "./config.js";
+import { type ConfigReport, CONFIG_PATH, LOCAL_CONFIG_PATH, loadConfig, type ResolvedConfig, ROLES, TEST_AGENT, type Role, userConfigPath } from "./config.js";
 import { type Finding, hasErrors } from "./finding.js";
 
 export interface DoctorReport {
@@ -169,7 +169,7 @@ function excludeFinding(root: string, git: string | undefined, env: Env): Findin
  * (docs/agents.md). Generic: any agent absent from the adapter registry is rejected here. The test
  * agent is exempt: it runs a script instead of a CLI.
  */
-export function unsupportedAgentFindings(roles: Record<Role, { agent: string }>): Finding[] {
+export function unsupportedAgentFindings(roles: Record<Role, { agent: string }>, userConfig: string): Finding[] {
   return ROLES.flatMap((role) => {
     const { agent } = roles[role];
     if (agent === TEST_AGENT || adapterFor(agent) !== undefined) return [];
@@ -178,7 +178,7 @@ export function unsupportedAgentFindings(roles: Record<Role, { agent: string }>)
         check: `roles.${role}`,
         level: "error" as const,
         message: `roles.${role}.agent: ${agent} has no unattended mode; see docs/agents.md`,
-        fix: `Set roles.${role}.agent in ${CONFIG_PATH} to an agent with an unattended mode`,
+        fix: `Set roles.${role}.agent in ${userConfig} to an agent with an unattended mode`,
       },
     ];
   });
@@ -186,7 +186,7 @@ export function unsupportedAgentFindings(roles: Record<Role, { agent: string }>)
 
 /** Checks the agent binary of every configured role, and that the tester is independent of the developer. */
 function agentFindings(config: ResolvedConfig, env: Env): Finding[] {
-  const findings = unsupportedAgentFindings(config.roles);
+  const findings = unsupportedAgentFindings(config.roles, userConfigPath(env));
   for (const role of ROLES) {
     const { agent } = config.roles[role];
     const adapter = adapterFor(agent);

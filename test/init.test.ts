@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
 import { which } from "../src/doctor.js";
-import { fakeHerdr, tempRepo } from "./helpers.js";
+import { fakeHerdr, tempRepo, writeUserConfig } from "./helpers.js";
 
 const FAKE_GH = fileURLToPath(new URL("./fixtures/init-gh.mjs", import.meta.url));
 
@@ -129,22 +129,25 @@ describe("AC-1: without role options, gdt init reports a proposal and writes not
 });
 
 describe("AC-2: with all three role specs, gdt init writes a valid config", () => {
-  it("writes the roles, the required checks and omits keys at their default", () => {
+  it("writes the roles to the user config and the checks to a role-free repository config", () => {
     const root = tempRepo();
     const path = initPath({ checks: ["lost"] });
 
     const result = init([...SPECS, "--required-check", "test"], root, path);
 
     expect(result.code).toBe(0);
-    const text = readFileSync(configPath(root), "utf8");
-    expect(text).toContain('[roles.developer]\nagent = "opencode"\nmodel = "deepseek/deepseek-v4-flash"');
-    expect(text).toContain('[roles.tester]\nagent = "claude"\nmodel = "claude-sonnet-5"');
-    expect(text).toContain('[roles.reviewer]\nagent = "codex"\nmodel = "gpt-5.6-luna"');
-    expect(text).toContain('required_checks = ["test"]');
+    const config = readFileSync(configPath(root), "utf8");
+    expect(config).toContain('required_checks = ["test"]');
     // language, terminal and allow_no_required_checks keep their default and are not written.
-    expect(text).not.toContain("language =");
-    expect(text).not.toContain("terminal =");
-    expect(text).not.toContain("allow_no_required_checks");
+    expect(config).not.toContain("[roles.");
+    expect(config).not.toContain("language =");
+    expect(config).not.toContain("terminal =");
+    expect(config).not.toContain("allow_no_required_checks");
+
+    const user = readFileSync(join(root, ".config", "gdt", "config.toml"), "utf8");
+    expect(user).toContain('[roles.developer]\nagent = "opencode"\nmodel = "deepseek/deepseek-v4-flash"');
+    expect(user).toContain('[roles.tester]\nagent = "claude"\nmodel = "claude-sonnet-5"');
+    expect(user).toContain('[roles.reviewer]\nagent = "codex"\nmodel = "gpt-5.6-luna"');
   });
 
   it("is accepted by gdt doctor", () => {
@@ -339,5 +342,86 @@ describe("AC-8: the operator skill and README use gdt init", () => {
       expect(help.stdout).toContain(option);
     }
     expect(runGdt(["--help"], root, path).stdout).toContain("init");
+  });
+});
+
+// Issue #51: the roles moved from the repository config to the per-user config.
+
+const USER_CONFIG = join(".config", "gdt", "config.toml");
+
+describe("AC-5 (issue #51): gdt init with role options writes the roles to the user config", () => {
+  it("writes the roles to the user config and a role-free repository config", () => {
+    const root = tempRepo();
+    const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+    const path = initPath();
+    const result = init([...SPECS, "--required-check", "test"], root, path, home);
+
+    expect(result.code).toBe(0);
+    const user = readFileSync(join(home, USER_CONFIG), "utf8");
+    expect(user).toContain('[roles.developer]\nagent = "opencode"\nmodel = "deepseek/deepseek-v4-flash"');
+    expect(user).toContain('[roles.reviewer]\nagent = "codex"\nmodel = "gpt-5.6-luna"');
+    const config = readFileSync(configPath(root), "utf8");
+    expect(config).toContain('required_checks = ["test"]');
+    expect(config).not.toContain("[roles.");
+  });
+
+  it("refuses without --force when the user config already defines a role, writing neither file", () => {
+    const root = tempRepo();
+    const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+    writeUserConfig(home, '[roles.developer]\nagent = "claude"\nmodel = "old"\n');
+    const before = readFileSync(join(home, USER_CONFIG), "utf8");
+
+    const result = init([...SPECS, "--required-check", "test"], root, initPath(), home);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--force");
+    expect(existsSync(configPath(root))).toBe(false);
+    expect(readFileSync(join(home, USER_CONFIG), "utf8")).toBe(before);
+  });
+
+  it("replaces only the role tables of the user config with --force", () => {
+    const root = tempRepo();
+    const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+    writeUserConfig(home, '# keep this comment\n[roles.developer]\nagent = "claude"\nmodel = "old"\n');
+
+    const result = init([...SPECS, "--required-check", "test", "--force"], root, initPath(), home);
+
+    expect(result.code).toBe(0);
+    const user = readFileSync(join(home, USER_CONFIG), "utf8");
+    expect(user).toContain("# keep this comment");
+    expect(user).toContain('[roles.developer]\nagent = "opencode"\nmodel = "deepseek/deepseek-v4-flash"');
+    expect(user).not.toContain('model = "old"');
+  });
+});
+
+describe("AC-6 (issue #51): gdt init without role options reuses the roles from the user config", () => {
+  it("writes a role-free repository config, leaves the user config unchanged and names it", () => {
+    const root = tempRepo();
+    const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+    writeUserConfig(home);
+    const before = readFileSync(join(home, USER_CONFIG), "utf8");
+    const path = initPath({ checks: ["test"] });
+
+    const result = init([], root, path, home);
+
+    expect(result.code).toBe(0);
+    const config = readFileSync(configPath(root), "utf8");
+    expect(config).toContain('required_checks = ["test"]');
+    expect(config).not.toContain("[roles.");
+    expect(readFileSync(join(home, USER_CONFIG), "utf8")).toBe(before);
+    expect(result.stdout).toContain(join(home, USER_CONFIG));
+  });
+
+  it("only reports the proposal when the user config does not define all three roles", () => {
+    const root = tempRepo();
+    const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+    writeUserConfig(home, '[roles.developer]\nagent = "claude"\nmodel = "claude-sonnet-5"\n');
+    const path = initPath({ checks: ["test"] });
+
+    const result = init([], root, path, home);
+
+    expect(result.code).toBe(0);
+    expect(existsSync(configPath(root))).toBe(false);
+    expect(result.stdout).toContain("gdt init --developer");
   });
 });

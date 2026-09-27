@@ -95,18 +95,19 @@ describe("AC-2: an existing split workspace moves to tabs under the new default"
 });
 
 describe("AC-3: gdt's own repository config uses the terminal defaults", () => {
-  it("has no terminal or herdr_layout key and keeps the other keys", () => {
+  it("has no terminal or herdr_layout key, no role table, and keeps the other keys", () => {
     const text = readFileSync(".gdt/config.toml", "utf8");
     expect(text).not.toMatch(/^(terminal|herdr_layout)\s*=/m);
+    expect(text).not.toMatch(/^\[roles\./m);
     expect(text).toContain('required_checks = ["test"]');
-    expect(text).toContain("[roles.developer]");
+    expect(text).toContain('language = "en"');
   });
 });
 
 describe("AC-4: documentation shows herdr with tabs as the default", () => {
   it("lists herdr_layout with default tabs in the README and presents herdr as the default in the requirements", () => {
     const text = readme();
-    expect(text).toMatch(/\| `workflow\.herdr_layout` \| `tabs` \|/);
+    expect(text).toMatch(/\| `workflow\.herdr_layout` \| repository \| `tabs` \|/);
 
     const requirements = requirementsSection();
     expect(requirements).toContain("default");
@@ -137,7 +138,7 @@ describe("AC-5: the README states the agent prerequisites and that gdt does not 
   it("explains the prerequisites next to the requirements", () => {
     const requirements = requirementsSection();
     expect(requirements).toContain("### Agent prerequisites");
-    expect(requirements).toContain("`.gdt/config.toml`");
+    expect(requirements).toContain("`~/.config/gdt/config.toml`");
     expect(requirements).toContain("`roles.<role>.model`");
     expect(requirements).toMatch(/install the agent CLI/i);
     expect(requirements).toMatch(/log in or configure its API key or subscription/i);

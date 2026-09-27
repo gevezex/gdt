@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ADAPTERS, type Adapter, type Invocation } from "../src/agents/index.js";
 import { type DoctorReport, unsupportedAgentFindings } from "../src/doctor.js";
 import { runInvocation } from "../src/worker.js";
-import { EXAMPLE_CONFIG, fakePath, gdt, tempRepo } from "./helpers.js";
+import { EXAMPLE_CONFIG, EXAMPLE_USER_CONFIG, fakePath, gdt, tempRepo, writeUserConfig } from "./helpers.js";
 
 const DOCS = readFileSync("docs/agents.md", "utf8");
 
@@ -93,8 +93,10 @@ describe("AC-5: exit codes pass through unchanged", () => {
   });
 });
 
-function doctor(config: string, agents: string[]) {
-  const result = gdt(["doctor", "--json"], tempRepo({ ".gdt/config.toml": config }), fakePath({ agents }));
+function doctor(config: string, agents: string[], user = EXAMPLE_USER_CONFIG) {
+  const root = tempRepo({ ".gdt/config.toml": config });
+  writeUserConfig(root, user);
+  const result = gdt(["doctor", "--json"], root, fakePath({ agents }));
   return { code: result.code, report: JSON.parse(result.stdout) as DoctorReport };
 }
 
@@ -108,8 +110,8 @@ describe("AC-6: doctor reports missing agent CLIs", () => {
   });
 
   it("does not check agents used by no role", () => {
-    const config = EXAMPLE_CONFIG.replace('agent = "codex"', 'agent = "claude"').replace('model = "gpt-5.6-luna"', 'model = "claude-opus-5-5"');
-    const { code, report } = doctor(config, ["claude", "opencode"]);
+    const user = EXAMPLE_USER_CONFIG.replace('agent = "codex"', 'agent = "claude"').replace('model = "gpt-5.6-luna"', 'model = "claude-opus-5-5"');
+    const { code, report } = doctor(EXAMPLE_CONFIG, ["claude", "opencode"], user);
     expect(report.findings.map((f) => f.message).join("\n")).not.toContain("codex");
     expect(report.findings).toContainEqual(expect.objectContaining({ level: "ok", message: expect.stringMatching(/^roles\.reviewer: claude found at /) }));
     expect(code).toBe(0);
@@ -118,8 +120,8 @@ describe("AC-6: doctor reports missing agent CLIs", () => {
 
 describe("AC-7: doctor warns on same-vendor developer and tester", () => {
   it("warns when both use deepseek", () => {
-    const config = EXAMPLE_CONFIG.replace('agent = "claude"', 'agent = "opencode"').replace('model = "claude-sonnet-5"', 'model = "deepseek/deepseek-v4-flash"');
-    const { code, report } = doctor(config, ["opencode", "codex"]);
+    const user = EXAMPLE_USER_CONFIG.replace('agent = "claude"', 'agent = "opencode"').replace('model = "claude-sonnet-5"', 'model = "deepseek/deepseek-v4-flash"');
+    const { code, report } = doctor(EXAMPLE_CONFIG, ["opencode", "codex"], user);
     expect(report.findings).toContainEqual({
       check: "roles.tester",
       level: "warning",
@@ -199,7 +201,7 @@ describe("AC-4: omp adapter matches its verified invocation", () => {
 describe("AC-5: an unsupported agent is rejected", () => {
   // Fixture: the registry is the only definition of "supported", so removing an entry marks that
   // agent unsupported for this run. No real agent among MCode, pi and omp is unsupported.
-  const config = EXAMPLE_CONFIG.replace('agent = "claude"', 'agent = "pi"');
+  const user = EXAMPLE_USER_CONFIG.replace('agent = "claude"', 'agent = "pi"');
 
   function withoutPi<T>(run: () => T): T {
     const saved = ADAPTERS.pi;
@@ -213,20 +215,20 @@ describe("AC-5: an unsupported agent is rejected", () => {
 
   it("doctor reports an error finding naming the role and agent", () => {
     withoutPi(() => {
-      const { code, report } = doctor(config, ["opencode", "codex"]);
-      expect(report.findings).toContainEqual({
-        check: "roles.tester",
-        level: "error",
-        message: "roles.tester.agent: pi has no unattended mode; see docs/agents.md",
-        fix: "Set roles.tester.agent in .gdt/config.toml to an agent with an unattended mode",
-      });
+      const { code, report } = doctor(EXAMPLE_CONFIG, ["opencode", "codex"], user);
+      const finding = report.findings.find((f) => f.check === "roles.tester" && f.level === "error");
+      expect(finding?.message).toBe("roles.tester.agent: pi has no unattended mode; see docs/agents.md");
+      expect(finding?.fix).toContain("Set roles.tester.agent in ");
+      expect(finding?.fix).toContain(".config/gdt/config.toml");
       expect(code).toBe(1);
     });
   });
 
   it("start exits 1 and names the role and agent", () => {
     withoutPi(() => {
-      const result = gdt(["start", "12"], tempRepo({ ".gdt/config.toml": config }), fakePath());
+      const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG });
+      writeUserConfig(root, user);
+      const result = gdt(["start", "12"], root, fakePath());
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("roles.tester.agent: pi has no unattended mode; see docs/agents.md");
     });
@@ -234,23 +236,26 @@ describe("AC-5: an unsupported agent is rejected", () => {
 
   it("is generic: any agent without an adapter is rejected, not only the known ones", () => {
     expect(
-      unsupportedAgentFindings({
-        developer: { agent: "fixture" },
-        tester: { agent: "fixture" },
-        reviewer: { agent: "claude" },
-      }),
+      unsupportedAgentFindings(
+        {
+          developer: { agent: "fixture" },
+          tester: { agent: "fixture" },
+          reviewer: { agent: "claude" },
+        },
+        "/home/u/.config/gdt/config.toml",
+      ),
     ).toEqual([
       {
         check: "roles.developer",
         level: "error",
         message: "roles.developer.agent: fixture has no unattended mode; see docs/agents.md",
-        fix: "Set roles.developer.agent in .gdt/config.toml to an agent with an unattended mode",
+        fix: "Set roles.developer.agent in /home/u/.config/gdt/config.toml to an agent with an unattended mode",
       },
       {
         check: "roles.tester",
         level: "error",
         message: "roles.tester.agent: fixture has no unattended mode; see docs/agents.md",
-        fix: "Set roles.tester.agent in .gdt/config.toml to an agent with an unattended mode",
+        fix: "Set roles.tester.agent in /home/u/.config/gdt/config.toml to an agent with an unattended mode",
       },
     ]);
   });
