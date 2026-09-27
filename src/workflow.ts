@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { relative } from "node:path";
 import { headless } from "./backends/headless.js";
 import { type Backend, backendFor } from "./backends/index.js";
-import { loadConfig, ROLES } from "./config.js";
+import { loadConfig, ROLES, userConfigPath } from "./config.js";
 import { validateContract } from "./contract.js";
 import { findRepository, herdrPreflight, unsupportedAgentFindings } from "./doctor.js";
 import { changedFiles } from "./git.js";
@@ -68,9 +68,13 @@ function newState(issue: number, repo: string): State {
 export function start(issue: number, cwd: string, env: Env): CommandResult {
   const root = findRepository(cwd);
   if (root === null) return fail(`${cwd} is not inside a Git repository. Run gdt from a checkout of the target repository.\n`);
-  const { report } = loadConfig(root, env);
-  if (!report.valid) return fail('.gdt/config.toml is invalid. Run "gdt doctor" for details.\n');
-  const unsupported = unsupportedAgentFindings(report.roles);
+  const { report, findings } = loadConfig(root, env);
+  if (!report.valid) {
+    // AC-2: `gdt start` refuses with the same config errors as `gdt doctor`.
+    const errors = findings.filter((finding) => finding.level === "error").map((finding) => finding.message);
+    return fail(`${errors.join("\n")}\nRun "gdt doctor" for details.\n`);
+  }
+  const unsupported = unsupportedAgentFindings(report.roles, userConfigPath(env));
   if (unsupported.length > 0) return fail(`${unsupported.map((f) => f.message).join("\n")}\n`);
   if (report.workflow.terminal === "herdr") {
     const problem = herdrPreflight(env);

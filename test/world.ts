@@ -100,20 +100,9 @@ export function config(
   terminal: "headless" | "herdr" = "headless",
   supervisorPane?: boolean,
   herdrLayout?: "split" | "tabs",
-  roleAgents?: Partial<Record<"developer" | "tester" | "reviewer", string>>,
 ): string {
-  const role = (name: "developer" | "tester" | "reviewer") => {
-    const agent = roleAgents?.[name] ?? "fake";
-    const lines = [`[roles.${name}]`, `agent = "${agent}"`, `model = "none"`];
-    if (agent === "fake") lines.push(`script = "scripts/${name}.sh"`);
-    return `${lines.join("\n")}\n`;
-  };
   return [
     'language = "en"',
-    "",
-    role("developer"),
-    role("tester"),
-    role("reviewer"),
     "[workflow]",
     'required_checks = ["ci"]',
     `terminal = "${terminal}"`,
@@ -125,15 +114,21 @@ export function config(
   ].join("\n");
 }
 
+/** The user config for `world`: the three roles, using the `fake` test agent unless overridden. */
+export function userConfig(roleAgents?: Partial<Record<"developer" | "tester" | "reviewer", string>>): string {
+  const role = (name: "developer" | "tester" | "reviewer") => {
+    const agent = roleAgents?.[name] ?? "fake";
+    const lines = [`[roles.${name}]`, `agent = "${agent}"`, `model = "none"`];
+    if (agent === "fake") lines.push(`script = "scripts/${name}.sh"`);
+    return lines.join("\n");
+  };
+  return `${(["developer", "tester", "reviewer"] as const).map(role).join("\n\n")}\n`;
+}
+
 export function world(options: Options = {}): World {
   const root = tempRepo({
-    ".gdt/config.toml": config(
-      options.handoffChecks ?? 5,
-      options.terminal ?? "headless",
-      options.supervisorPane,
-      options.herdrLayout,
-      options.roleAgents,
-    ),
+    ".config/gdt/config.toml": userConfig(options.roleAgents),
+    ".gdt/config.toml": config(options.handoffChecks ?? 5, options.terminal ?? "headless", options.supervisorPane, options.herdrLayout),
     "scripts/developer.sh": options.developer ?? "exit 0\n",
     "scripts/tester.sh": options.tester ?? "/bin/sleep 60\n",
     "scripts/reviewer.sh": "/bin/sleep 60\n",

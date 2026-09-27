@@ -5,13 +5,17 @@ gdt for them. They should never have to memorise a gdt command.
 
 ## First-time setup
 
-- With no `.gdt/config.toml`, run `gdt init --json`. It writes nothing and reports
-  the supported agents, which are on PATH, the terminal and the detected CI checks.
+- With no `.gdt/config.toml`, run `gdt init --json`. It reports the supported
+  agents, which are on PATH, the terminal and the detected CI checks.
 - Present that proposal to the user and ask which agent and model each role
   (developer, tester, reviewer) uses. Do not pick models for them.
 - Run `gdt init` with their choices, for example
   `gdt init --developer opencode/deepseek/deepseek-v4-flash --tester claude/claude-sonnet-5 --reviewer codex/gpt-5.6-luna`.
-  It writes the config, runs `gdt doctor` and installs this skill.
+  It writes the roles to the user config (`~/.config/gdt/config.toml`, or
+  `$XDG_CONFIG_HOME/gdt/config.toml`) and the project settings to
+  `.gdt/config.toml`, then runs `gdt doctor` and installs this skill.
+- When the user config already defines all three roles, `gdt init` without role
+  options reuses them and only writes `.gdt/config.toml`.
 
 ## Start
 

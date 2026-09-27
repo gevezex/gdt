@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DoctorReport } from "../src/doctor.js";
-import { EXAMPLE_CONFIG, fakePath, gdt, tempRepo } from "./helpers.js";
+import { EXAMPLE_CONFIG, EXAMPLE_USER_CONFIG, fakePath, gdt, tempRepo, USER_CONFIG, writeUserConfig } from "./helpers.js";
 
 function doctorJson(root: string, path?: string) {
   const result = gdt(["doctor", "--json"], root, path);
@@ -20,20 +20,22 @@ function errors(report: DoctorReport) {
 describe("AC-3: valid configuration is reported", () => {
   it("reports the resolved roles, well-formed findings and exits 0", () => {
     const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG });
+    writeUserConfig(root);
+    const userPath = join(root, USER_CONFIG);
     const { code, stdout, report } = doctorJson(root);
 
     // The exact JSON path from the issue, independent of the TypeScript types.
     const json = JSON.parse(stdout) as { config: Record<string, unknown> & { roles: Record<string, unknown> } };
     expect(json.config.valid).toBe(true);
-    expect(json.config.roles.tester).toEqual({ agent: "claude", model: "claude-sonnet-5", source: ".gdt/config.toml" });
+    expect(json.config.roles.tester).toEqual({ agent: "claude", model: "claude-sonnet-5", source: userPath });
     expect(json.config).not.toHaveProperty("config");
 
     expect(report.config.valid).toBe(true);
     if (!report.config.valid) return;
     expect(report.config.roles).toEqual({
-      developer: { agent: "opencode", model: "deepseek/deepseek-v4-flash", source: ".gdt/config.toml" },
-      tester: { agent: "claude", model: "claude-sonnet-5", source: ".gdt/config.toml" },
-      reviewer: { agent: "codex", model: "gpt-5.6-luna", source: ".gdt/config.toml" },
+      developer: { agent: "opencode", model: "deepseek/deepseek-v4-flash", source: userPath },
+      tester: { agent: "claude", model: "claude-sonnet-5", source: userPath },
+      reviewer: { agent: "codex", model: "gpt-5.6-luna", source: userPath },
     });
     expect(report.findings.length).toBeGreaterThan(0);
     for (const finding of report.findings) {
@@ -87,28 +89,43 @@ describe("contract.extra_rules", () => {
 });
 
 describe("AC-4: invalid configuration names the key and allowed values", () => {
-  const badAgent = EXAMPLE_CONFIG.replace('agent = "claude"', 'agent = "foo"');
+  const badAgent = EXAMPLE_USER_CONFIG.replace('agent = "claude"', 'agent = "foo"');
+
+  function badAgentRepo() {
+    const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG });
+    writeUserConfig(root, badAgent);
+    return root;
+  }
 
   it("reports an unsupported agent and exits 1", () => {
-    const result = gdt(["doctor"], tempRepo({ ".gdt/config.toml": badAgent }));
+    const result = gdt(["doctor"], badAgentRepo());
     expect(result.stdout).toContain('roles.tester.agent: "foo" is not one of claude, codex, opencode, mcode, pi, omp');
     expect(result.code).toBe(1);
   });
 
   it("reports the offending key as an error finding in JSON", () => {
-    const { code, report } = doctorJson(tempRepo({ ".gdt/config.toml": badAgent }));
+    const root = badAgentRepo();
+    const { code, report } = doctorJson(root);
     expect(report.config.valid).toBe(false);
     expect(errors(report)).toContainEqual({
       check: "config",
       level: "error",
       message: 'roles.tester.agent: "foo" is not one of claude, codex, opencode, mcode, pi, omp',
-      fix: "Set roles.tester.agent in .gdt/config.toml to one of claude, codex, opencode, mcode, pi, omp",
+      fix: `Set roles.tester.agent in ${join(root, USER_CONFIG)} to one of claude, codex, opencode, mcode, pi, omp`,
     });
     expect(code).toBe(1);
   });
 
+  it("reports a missing role", () => {
+    const root = tempRepo({ ".gdt/config.toml": EXAMPLE_CONFIG });
+    writeUserConfig(root, EXAMPLE_USER_CONFIG.replace(/\[roles\.reviewer\]\n.*\n.*\n/, ""));
+    const { code, report } = doctorJson(root);
+    expect(errors(report).map((f) => f.message).join("\n")).toContain("roles.reviewer: missing");
+    expect(report.config.valid).toBe(false);
+    expect(code).toBe(1);
+  });
+
   it.each([
-    ["a missing role", EXAMPLE_CONFIG.replace(/\[roles\.reviewer\]\n.*\n.*\n/, ""), "roles.reviewer: missing"],
     [
       "a wrong type",
       EXAMPLE_CONFIG.replace("max_correction_rounds = 2", 'max_correction_rounds = "two"'),
@@ -143,6 +160,7 @@ describe("AC-5: local override wins and shows its source", () => {
       ".gdt/config.toml": EXAMPLE_CONFIG,
       ".gdt/config.local.toml": '[roles.tester]\nmodel = "claude-haiku-4-5"\n',
     });
+    writeUserConfig(root);
 
     for (let run = 0; run < 2; run++) {
       const { report } = doctorJson(root);
@@ -153,7 +171,7 @@ describe("AC-5: local override wins and shows its source", () => {
         model: "claude-haiku-4-5",
         source: ".gdt/config.local.toml",
       });
-      expect(report.config.roles.developer.source).toBe(".gdt/config.toml");
+      expect(report.config.roles.developer.source).toBe(join(root, USER_CONFIG));
     }
 
     const exclude = readFileSync(join(root, ".git/info/exclude"), "utf8").split("\n");

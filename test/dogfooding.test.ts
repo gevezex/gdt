@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { run } from "../src/cli.js";
 import { loadConfig } from "../src/config.js";
 import type { DoctorReport } from "../src/doctor.js";
-import { fakePath, gdt } from "./helpers.js";
+import { fakePath, writeUserConfig } from "./helpers.js";
 
 const REPO_ROOT = process.cwd();
 const DOCS = readFileSync("docs/dogfooding.md", "utf8");
@@ -52,18 +55,32 @@ function expectComplete(run: RunRecord, backend: string): void {
 }
 
 describe("AC-1: the repository is configured for gdt", () => {
+  /** A temporary user config so the test never reads or writes the real home directory. */
+  function tempHome(): string {
+    const home = mkdtempSync(join(tmpdir(), "gdt-home-"));
+    writeUserConfig(home);
+    return home;
+  }
+
   it("has language en and required_checks [test] in .gdt/config.toml", () => {
-    const { report } = loadConfig(REPO_ROOT);
+    const { report } = loadConfig(REPO_ROOT, { HOME: tempHome() });
     expect(report.valid).toBe(true);
     if (!report.valid) return;
     expect(report.files).toContain(".gdt/config.toml");
     expect(report.language).toBe("en");
     expect(report.workflow.required_checks).toEqual(["test"]);
+    expect(report.roles.developer.source).toContain(join(".config", "gdt", "config.toml"));
   });
 
   it("doctor reports no error finding", () => {
-    const result = gdt(["doctor", "--json"], REPO_ROOT, fakePath());
-    const report = JSON.parse(result.stdout) as DoctorReport;
+    let stdout = "";
+    run(["doctor", "--json"], {
+      cwd: REPO_ROOT,
+      env: { PATH: fakePath(), HOME: tempHome() },
+      stdout: (text) => (stdout += text),
+      stderr: () => {},
+    });
+    const report = JSON.parse(stdout) as DoctorReport;
     expect(report.config.valid).toBe(true);
     expect(report.findings.filter((finding) => finding.level === "error")).toEqual([]);
     expect(report.ok).toBe(true);

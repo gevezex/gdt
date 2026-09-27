@@ -1,0 +1,6 @@
+# Local config: .gdt/config.local.toml in one clone, never committed.
+# Use it for an exception on this machine; gdt adds it to .git/info/exclude.
+# Roles come from the user config (examples/user-config.toml) unless overridden here.
+
+[roles.reviewer]
+model = "gpt-6-sol"    # Override just the reviewer model on this machine

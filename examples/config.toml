@@ -1,0 +1,20 @@
+# .gdt/config.toml — project settings, committed in the repository.
+# Roles do NOT belong here: they are per user and live in the user config
+# (examples/user-config.toml) or, for one clone only, in .gdt/config.local.toml
+# (examples/config.local.toml). A [roles.*] table in this file is a gdt error.
+
+language = "en"                    # Language for human-facing GitHub text ("en" or "nl")
+
+[workflow]
+max_correction_rounds = 2          # Correction rounds allowed after round 0
+required_checks = ["test"]         # CI checks that must be green before ready_to_merge
+allow_no_required_checks = false   # Allow an empty required_checks list
+terminal = "herdr"                 # "herdr" (one tab per role) or "headless"
+supervisor_pane = false            # herdr: show the supervisor in its own pane
+herdr_layout = "tabs"              # herdr: "tabs" (one tab per pane) or "split"
+poll_seconds = 30                  # Seconds between supervisor polls of GitHub
+handoff_checks = 5                 # Handoff records to check before a review handoff
+
+[contract]
+max_acceptance_criteria = 8        # Maximum number of acceptance criteria per issue
+# extra_rules = ".gdt/rules.md"    # Optional file with project rules added to every role prompt

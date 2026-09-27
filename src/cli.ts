@@ -2,12 +2,12 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig, ROLES, type Role } from "./config.js";
+import { CONFIG_PATH, DEFAULT_LANGUAGE, DEFAULT_MAX_ACCEPTANCE_CRITERIA, loadConfig, readUserConfig, ROLES, type Role } from "./config.js";
 import { validateContract } from "./contract.js";
 import { findRepository, herdrPreflight, runDoctor } from "./doctor.js";
 import type { Finding } from "./finding.js";
 import { detectedChecks, issueBody } from "./github.js";
-import { createRoleRulesFiles, parseRoleSpec, type Proposal, proposal, type RoleSpec, serializeConfig, writeConfig } from "./init.js";
+import { createRoleRulesFiles, parseRoleSpec, type Proposal, proposal, type RoleSpec, serializeConfig, writeConfig, writeUserConfig } from "./init.js";
 import { loadLocale, shippedLanguages } from "./locale.js";
 import { allowRound, answer, installSkill, pause, resume, setAgent, steer } from "./steering.js";
 import { supervise } from "./supervisor.js";
@@ -32,8 +32,8 @@ Usage:
   gdt <command> [options]
 
 Commands:
-  init          Create .gdt/config.toml and install the operator skill
-  doctor        Check tools, GitHub authentication and .gdt/config.toml
+  init          Write roles to the user config and .gdt/config.toml; install the skill
+  doctor        Check tools, GitHub authentication and the configuration
   check-issue   Validate an issue body against the issue contract
   start         Start the workflow for an issue in the background
   status        Show the workflow status and the next step
@@ -56,9 +56,9 @@ Options:
 
 const DOCTOR_HELP = `Usage: gdt doctor [--json]
 
-Checks that git and gh are installed, gh is authenticated, and that
-.gdt/config.toml (merged with .gdt/config.local.toml) is valid.
-Exits with 1 when any finding has level "error".
+Checks that git and gh are installed, gh is authenticated, and that the user
+config (roles), .gdt/config.toml (project settings) and .gdt/config.local.toml
+are valid. Exits with 1 when any finding has level "error".
 `;
 
 const INIT_HELP = `Usage: gdt init [--json]
@@ -67,9 +67,12 @@ const INIT_HELP = `Usage: gdt init [--json]
                 [--required-check <name>]... [--allow-no-required-checks] [--force]
 
 Without the three role options, reports the supported agents, whether each is on
-PATH, the usable terminal, the detected CI checks and the language, and writes
-nothing. With them, writes .gdt/config.toml, runs "gdt doctor" and installs the
-operator skill.
+PATH, the usable terminal, the detected CI checks and the language. When the
+user config (see below) defines all three roles it writes .gdt/config.toml; with
+the three role options it writes the roles to the user config and the project
+settings to .gdt/config.toml, then runs "gdt doctor" and installs the operator
+skill. The user config is $XDG_CONFIG_HOME/gdt/config.toml, or
+$HOME/.config/gdt/config.toml when XDG_CONFIG_HOME is not set.
 
 Options:
   --developer <agent>/<model>    Agent and model for the developer role
@@ -253,28 +256,46 @@ function initCommand(args: readonly string[], io: Io): number {
     return EXIT_FAILED;
   }
 
+  const user = readUserConfig(io.env);
+  if (user.findings.length > 0) {
+    io.stderr(`${user.findings.map((finding) => finding.message).join("\n")}\n`);
+    return EXIT_FAILED;
+  }
+
   const specs: Record<Role, string | undefined> = { developer, tester, reviewer };
   const given = ROLES.filter((role) => specs[role] !== undefined);
-  if (given.length === 0) {
+
+  // AC-6: without a user config that defines all three roles, `gdt init` only reports the proposal.
+  if (given.length === 0 && !ROLES.every((role) => user.roles[role] !== undefined)) {
     const facts = proposal(root, io.env);
     io.stdout(json ? `${JSON.stringify(facts, null, 2)}\n` : formatProposal(facts));
     return EXIT_OK;
   }
-  if (given.length < ROLES.length) {
-    const missing = ROLES.filter((role) => specs[role] === undefined)
-      .map((role) => `"--${role}"`)
-      .join(", ");
-    return usageError(io, `Missing ${missing} for "gdt init".`, "gdt init --help");
-  }
 
-  const roles = {} as Record<Role, RoleSpec>;
-  for (const role of ROLES) {
-    const parsed = parseRoleSpec(specs[role] ?? "");
-    if ("error" in parsed) {
-      io.stderr(`${parsed.error}\n`);
+  let roles: Record<Role, RoleSpec> | undefined;
+  if (given.length > 0) {
+    if (given.length < ROLES.length) {
+      const missing = ROLES.filter((role) => specs[role] === undefined)
+        .map((role) => `"--${role}"`)
+        .join(", ");
+      return usageError(io, `Missing ${missing} for "gdt init".`, "gdt init --help");
+    }
+
+    roles = {} as Record<Role, RoleSpec>;
+    for (const role of ROLES) {
+      const parsed = parseRoleSpec(specs[role] ?? "");
+      if ("error" in parsed) {
+        io.stderr(`${parsed.error}\n`);
+        return EXIT_FAILED;
+      }
+      roles[role] = parsed;
+    }
+
+    // AC-5: refuse before writing anything when the user config already defines a role.
+    if (!force && user.defined.length > 0) {
+      io.stderr(`The user config ${user.path} already defines roles (${user.defined.join(", ")}); use --force to replace them\n`);
       return EXIT_FAILED;
     }
-    roles[role] = parsed;
   }
 
   const languages = shippedLanguages();
@@ -297,8 +318,19 @@ function initCommand(args: readonly string[], io: Io): number {
     return EXIT_FAILED;
   }
 
+  // AC-5: write the roles to the user config; AC-6 leaves an existing user config untouched.
+  if (roles !== undefined) {
+    const userError = writeUserConfig(io.env, roles);
+    if (userError !== null) {
+      io.stderr(`${userError}\n`);
+      return EXIT_FAILED;
+    }
+    io.stdout(`roles: written to ${user.path}\n`);
+  } else {
+    io.stdout(`roles: from ${user.path}\n`);
+  }
+
   const text = serializeConfig({
-    roles,
     language: language ?? DEFAULT_LANGUAGE,
     terminal: resolvedTerminal,
     requiredChecks: checks,
