@@ -7,7 +7,7 @@ import { validateContract } from "./contract.js";
 import { findRepository, herdrPreflight, runDoctor } from "./doctor.js";
 import type { Finding } from "./finding.js";
 import { detectedChecks, issueBody } from "./github.js";
-import { parseRoleSpec, type Proposal, proposal, type RoleSpec, serializeConfig, writeConfig } from "./init.js";
+import { createRoleRulesFiles, parseRoleSpec, type Proposal, proposal, type RoleSpec, serializeConfig, writeConfig } from "./init.js";
 import { loadLocale, shippedLanguages } from "./locale.js";
 import { allowRound, answer, installSkill, pause, resume, setAgent, steer } from "./steering.js";
 import { supervise } from "./supervisor.js";
@@ -309,6 +309,9 @@ function initCommand(args: readonly string[], io: Io): number {
     io.stderr(`${writeError}\n`);
     return EXIT_FAILED;
   }
+
+  // AC-4: the three supplementary role rules files; existing files are left unchanged.
+  for (const path of createRoleRulesFiles(root)) io.stdout(`created ${path}\n`);
 
   // AC-7: report the new config with doctor, then install the skill; the config stays in place either way.
   const report = runDoctor(root, io.env);

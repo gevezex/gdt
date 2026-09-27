@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { Role } from "./config.js";
 import { loadLocale, SECTION_KEYS } from "./locale.js";
@@ -38,8 +38,27 @@ export const RECORD_OF: Record<Role, Kind> = { developer: "handoff", tester: "te
 
 const ROLES_DIR = new URL("../roles/", import.meta.url);
 
+/** The directory, relative to a target repository's root, holding the per-role supplementary rules. */
+export const ROLE_RULES_DIR = ".gdt/roles";
+
 export function roleFile(name: RoleFile): string {
   return readFileSync(new URL(`${name}.md`, ROLES_DIR), "utf8");
+}
+
+/** The absolute path of a workflow role's supplementary rules file in `root`. */
+export function roleRulesPath(root: string, role: Role): string {
+  return join(root, ROLE_RULES_DIR, `${role}.md`);
+}
+
+/**
+ * The role's supplementary rules, trimmed, or `null` when the file is missing or empty (whitespace
+ * only). Read on every call, so a change reaches the role's next turn without a restart (AC-3).
+ */
+export function roleRules(root: string, role: Role): string | null {
+  const path = roleRulesPath(root, role);
+  if (!existsSync(path)) return null;
+  const text = readFileSync(path, "utf8").trimEnd();
+  return text.trim() === "" ? null : text;
 }
 
 /**
@@ -125,6 +144,10 @@ export function buildPrompt(role: Role, dispatch: PromptDispatch, project: Proje
     // A missing file is reported by `gdt doctor`; the prompt never invents rules.
     if (existsSync(path)) parts.push(["## Project rules", "", readFileSync(path, "utf8").trimEnd()].join("\n"));
   }
+
+  // AC-1/AC-2: a role's own supplementary rules, after the global project rules; empty adds nothing.
+  const rules = roleRules(project.root, role);
+  if (rules !== null) parts.push(["## Role rules", "", rules].join("\n"));
 
   return `${parts.join("\n\n")}\n`;
 }

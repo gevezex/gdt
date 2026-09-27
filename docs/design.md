@@ -164,6 +164,12 @@ max_acceptance_criteria = 8
   points to project rules appended to role prompts. That is where project-specific
   invariants live (for example "a local match is no proof of external processing").
   gdt itself ships none. A configured file that does not exist is a `doctor` error.
+- Per-role supplementary rules live at fixed paths, `.gdt/roles/<role>.md` for
+  `developer`, `tester` and `reviewer`, read on every turn. When a file has content, the
+  worker appends it to that role's prompt under `## Role rules`, after the
+  `contract.extra_rules` section. An empty or missing file adds nothing. These files only
+  add to gdt's own role files, which stay unchangeable; `gdt init` creates the three files
+  empty so users see where to put their rules.
 - `required_checks = []` refuses `ready_to_merge` unless
   `allow_no_required_checks = true`. An empty gate must never look like a green one.
 - `gdt doctor` warns when developer and tester use the same model vendor, because
@@ -334,10 +340,11 @@ completion signal, it prints a final line and exits.
 ### 9.4 Prompt construction
 
 Per turn the worker injects exactly: the role file, the protocol section that
-role writes, the locale's headings, the repository's `extra_rules`, pending
-directives for that role, and the dispatch facts (issue, round, PR, expected
-body hash). A role never loads another role's instructions. This replaces the
-pilot's single large skill read on every turn.
+role writes, the locale's headings, the repository's `extra_rules`, that role's
+`role rules` file (`.gdt/roles/<role>.md`), pending directives for that role, and
+the dispatch facts (issue, round, PR, expected body hash). A role never loads
+another role's instructions. This replaces the pilot's single large skill read on
+every turn.
 
 ### 9.5 Agent adapters
 
