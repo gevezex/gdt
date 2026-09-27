@@ -90,6 +90,13 @@ describe("AC-4: problems become issues", () => {
   it("links every listed problem to an issue in this repository", () => {
     const withProblems = runRecords().filter((run) => run.problems !== "none");
     expect(withProblems.length).toBeGreaterThan(0);
-    for (const run of withProblems) expect(run.problems).toMatch(/#[1-9]\d*/);
+    for (const run of withProblems) {
+      const links = [...run.problems.matchAll(/\[#(\d+)\]\((https:\/\/github\.com\/gevezex\/gdt\/issues\/(\d+))\)/g)];
+      expect(links.length).toBeGreaterThan(0);
+      for (const [, label, url, issue] of links) {
+        expect(label).toBe(issue);
+        expect(url).toBe(`https://github.com/gevezex/gdt/issues/${issue}`);
+      }
+    }
   });
 });

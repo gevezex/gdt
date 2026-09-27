@@ -12,7 +12,7 @@ is the `workflow.terminal` in effect for that run: `headless` or `herdr`
 | Issue | Date | Backend | Agents (developer / tester / reviewer) | Rounds | Final status | Human interventions | Problems found |
 |---|---|---|---|---|---|---|---|
 | #8 | 2026-09-26 | headless | opencode / claude / codex | 0 | ready_to_merge | none | none |
-| #7 | 2026-09-26 | headless | opencode / claude / codex | 0 | blocked | operator fixed a flaky required check in the pull request and re-ran the review by hand | the reviewer's block could not be lifted after the fix, so the run was finished by hand (#21) |
+| #7 | 2026-09-26 | headless | opencode / claude / codex | 0 | blocked | operator fixed a flaky required check in the pull request and re-ran the review by hand | the reviewer's block could not be lifted after the fix, so the run was finished by hand ([#21](https://github.com/gevezex/gdt/issues/21)) |
 | #21 | 2026-09-26 | herdr | opencode / claude / codex | 0 | ready_to_merge | none | none |
 | #9 | 2026-09-27 | herdr | opencode / claude / codex | 0 | ready_to_merge | answered question Q1 (unattended mode for MCode, pi and omp) | none |
 
