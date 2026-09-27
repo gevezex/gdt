@@ -156,6 +156,17 @@ class Supervisor {
     this.reportState(role, ROLE_PANE_STATE[state]);
   }
 
+  /** AC-1: sets the display-only agent label, for example `developer · opencode` or `gdt · supervisor`. */
+  private setDisplay(name: string, label: string): void {
+    try {
+      this.backend.setDisplayAgent(name, label);
+    } catch (err) {
+      if (this.reportWarned) return;
+      this.reportWarned = true;
+      log(`warning: herdr display label failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /** Records a status; notifies once when entering a notifying status. */
   private setStatus(status: Status, reason: string, extra: Partial<State> = {}): void {
     if (this.state.status !== status || this.state.reason !== reason) log(`status ${status}${reason === "" ? "" : `: ${reason}`}`);
@@ -176,10 +187,13 @@ class Supervisor {
 
   startWorkers(): void {
     this.backend.ensureWorkspace();
+    // AC-1: the agents overview shows the role next to the agent name, once per `gdt start`.
+    this.setDisplay("supervisor", "gdt · supervisor");
     this.backend.setTitle("supervisor", "supervisor · starting");
     this.reportState("supervisor", supervisorAgentState(this.state.status));
     for (const role of ROLES) {
       this.setRoleState(role, "WAITING");
+      this.setDisplay(role, `${role} · ${this.agents[role]}`);
       if (this.backend.alive(this.state.pids.workers[role] ?? -1)) continue;
       this.state.pids.workers[role] = this.backend.spawnPane(role, [process.execPath, cliPath(), "_worker", String(this.issue), role]);
     }

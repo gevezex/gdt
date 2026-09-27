@@ -154,6 +154,7 @@ required_checks = ["backend-tests", "frontend-checks"]
 allow_no_required_checks = false
 terminal = "herdr"              # "herdr" | "headless"
 supervisor_pane = false         # herdr: show a pane for the supervisor; default false
+herdr_layout = "split"          # herdr: "split" (one tab) | "tabs" (one tab per pane)
 
 [contract]
 max_acceptance_criteria = 8
@@ -364,7 +365,14 @@ Interface: `ensure_workspace`, `spawn_pane(name, argv)`, `set_title`, `alive`,
   socket API. With `workflow.supervisor_pane = true` the supervisor gets a pane as
   well; by default (`false`) it runs detached with `logs/supervisor.log`, like the
   headless backend, and a leftover supervisor pane is closed on `gdt start`.
-  herdr's own agent-state detection is display only; it never feeds a decision.
+  `workflow.herdr_layout` selects the layout: `split` (the default) keeps every
+  managed pane left to right in one tab, `tabs` gives each managed pane its own
+  tab, labelled with the pane name (`supervisor`, `developer`, `tester`,
+  `reviewer`). Changing the layout moves the existing panes into the new one on the
+  next `gdt start`, keeping their ids. Every pane also carries the display-only
+  role label `<role> · <agent>` (the supervisor shows `gdt · supervisor`), so
+  herdr's agents overview distinguishes the roles. herdr's own agent-state
+  detection is display only; it never feeds a decision.
 - **headless**: detached processes with log files under `.git/gdt/issue-<n>/`.
   Used for tests, CI and machines without herdr.
 

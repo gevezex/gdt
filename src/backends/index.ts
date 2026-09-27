@@ -22,6 +22,7 @@ export function backendFor(config: ResolvedConfig, root: string, issue: number, 
       logs: p.logs,
       agents,
       supervisorPane: config.workflow.supervisor_pane,
+      layout: config.workflow.herdr_layout,
     });
   }
   return headless(p.logs, root, env);

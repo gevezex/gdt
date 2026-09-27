@@ -12,6 +12,8 @@ export interface Backend {
   spawnPane(name: string, argv: readonly string[]): number;
   /** Sets the visible title of the named pane; a no-op for backends without titles. */
   setTitle(name: string, title: string): void;
+  /** AC-1: sets the display-only agent label shown in herdr's agents overview; a no-op elsewhere. */
+  setDisplayAgent(name: string, label: string): void;
   /** Reports the pane's agent lifecycle state; a no-op for backends without agent state. */
   reportState(name: string, state: AgentState): void;
   alive(handle: number): boolean;

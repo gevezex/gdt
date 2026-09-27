@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { adapterFor, supportedAgents } from "./agents/index.js";
-import { type Agent, ROLES, type Role } from "./config.js";
+import { backendFor } from "./backends/index.js";
+import { type Agent, loadConfig, ROLES, type Role } from "./config.js";
 import { findRepository, which } from "./doctor.js";
 import { comments, issueSnapshot, postIssueComment, postPullRequestComment, repository } from "./github.js";
 import { formatRecord, parseRecords, type ProtocolRecord } from "./protocol.js";
@@ -132,6 +133,16 @@ export function setAgent(issue: number, role: string, spec: string, cwd: string,
   const p = paths(rootOf(cwd), issue, env);
   if (readState(p) === null) return fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
   writeJsonAtomic(p.overrides, { ...readOverrides(p), [checked]: { agent: agent as Agent, model } });
+  // AC-1: the agents overview must name the role's new agent. Best effort: the pane may not exist
+  // yet, the terminal may be headless, or herdr may be missing; the override still applies.
+  try {
+    const { report } = loadConfig(p.root, env);
+    if (report.valid && report.workflow.terminal === "herdr") {
+      backendFor(report, p.root, issue, env, p).setDisplayAgent(checked, `${checked} · ${agent}`);
+    }
+  } catch {
+    // The override is written; the label is refreshed on the next `gdt start`.
+  }
   return ok(`${checked} for #${issue} now uses ${agent} with model ${model} from its next turn.\n`);
 }
 

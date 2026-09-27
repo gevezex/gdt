@@ -316,6 +316,7 @@ overrides (for example another model) and is not committed.
 | `workflow.max_correction_rounds` | `2` | Correction rounds after round 0 |
 | `workflow.terminal` | `"herdr"` | `"herdr"` or `"headless"` |
 | `workflow.supervisor_pane` | `false` | herdr: also show the supervisor in a pane |
+| `workflow.herdr_layout` | `split` | herdr: `"split"` (panes side by side in one tab) or `"tabs"` (one tab per pane) |
 | `workflow.poll_seconds` | `30` | How often the supervisor reads GitHub |
 | `contract.max_acceptance_criteria` | `8` | Maximum number of ACs per issue |
 | `contract.extra_rules` | none | File with project rules added to every role prompt |
