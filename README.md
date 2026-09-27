@@ -122,6 +122,7 @@ evidence too.
 | `git` | the shared checkout the roles work in |
 | `gh`, logged in (`gh auth login`) | issues, pull requests, comments, checks |
 | at least one agent CLI | `claude`, `codex`, `opencode`, `mcode`, `pi` or `omp` (see below) |
+| CI on pull requests | the target repository needs at least one CI check (for example a GitHub Actions job); `workflow.required_checks` lists its name as shown on the pull request and `gdt init` detects the names. Set `workflow.allow_no_required_checks = true` only as the explicit opt-out |
 | [herdr](https://herdr.dev) 0.9.1+ | the default way to watch the roles live, one tab per role; on machines without herdr set `workflow.terminal = "headless"` |
 
 ### Agent prerequisites
@@ -159,6 +160,12 @@ npm run build
 npm link          # puts `gdt` on your PATH
 ```
 
+A linked install runs `dist/` of that checkout, so gdt runs the code you built
+there. A workflow that runs gdt on that same checkout (for example on gdt's own
+repository) can rebuild `dist/` and change the running gdt mid-workflow. Use a
+linked install only to develop gdt; to run workflows, install the published
+package with `npm i -g @gevezex/gdt`.
+
 Then install the operator skill, so your coding agent knows how to drive gdt:
 
 ```bash
@@ -168,13 +175,34 @@ gdt install-skill
 It copies `skill/SKILL.md` into the skill directory of every agent CLI it finds
 (for example `~/.claude/skills/gdt`) and is safe to run again.
 
+## Security
+
+Before the first `gdt start`, know what a role turn can do:
+
+- Every role turn runs its agent CLI **without permission prompts** and with
+  shell access to the machine. The adapters pass, for example,
+  `--permission-mode bypassPermissions` for Claude Code and
+  `--dangerously-bypass-approvals-and-sandbox` for Codex, because nobody is
+  there to answer a prompt. Run gdt only where you accept that.
+- Issue and comment text is **task data** for the roles, never instructions to
+  the supervisor. Treat an issue body or a comment as untrusted input.
+- The tester and reviewer are **checked mechanically**: after their turn the
+  supervisor verifies that HEAD, branch and the tracked files are unchanged, and
+  blocks the workflow otherwise.
+- Roles act with **your own `gh` login**. An agent-written comment is
+  indistinguishable from one you wrote; gdt never merges, deploys or closes
+  issues.
+
+The full invocation for each agent is in [docs/agents.md](docs/agents.md); the
+trust boundaries are in
+[section 10 of docs/design.md](docs/design.md#10-security-and-trust-boundaries).
+
 ## Quick start
 
-### 1. Configure the target repository
+### 1. Set up the user config once per machine
 
-In the repository you want gdt to work on, create `.gdt/config.toml` with
-`gdt init` instead of writing TOML by hand. Ask your coding agent, or run it
-yourself:
+Roles belong to you, not to a repository, so they live in your user config. Ask
+your coding agent, or run `gdt init` yourself:
 
 ```bash
 gdt init --developer opencode/deepseek/deepseek-v4-flash \
@@ -182,27 +210,32 @@ gdt init --developer opencode/deepseek/deepseek-v4-flash \
          --reviewer codex/gpt-5.6-luna
 ```
 
-`gdt init` writes the roles to your user config (`~/.config/gdt/config.toml`,
-or `$XDG_CONFIG_HOME/gdt/config.toml`), writes the project settings to
-`.gdt/config.toml`, runs `gdt doctor` and installs the operator skill. Without the
+`gdt init` writes the roles to the user config (`~/.config/gdt/config.toml`, or
+`$XDG_CONFIG_HOME/gdt/config.toml`) and installs the operator skill. Without the
 three role options, it reuses the roles from your user config when they are all
 there; otherwise it only reports what it found (agents on `PATH`, the terminal,
 the detected CI checks) so your agent can discuss the roles with you first. It
-never overwrites an existing config without `--force`, and it requires at least
-one required check unless you pass `--allow-no-required-checks`.
+never overwrites an existing config without `--force`.
 
-Then check your setup:
+### 2. Configure each target repository
+
+In every repository you want gdt to work on, create `.gdt/config.toml` with
+`gdt init`, or commit a file based on
+[`examples/config.toml`](examples/config.toml). `gdt init` requires at least one
+required check unless you pass `--allow-no-required-checks`.
+
+Then check your setup in that repository:
 
 ```bash
 gdt doctor
 ```
 
-`doctor` checks `git`, `gh` and its login, the agent CLIs, herdr (when used)
-and the config, and prints a `fix:` line for every problem. It also warns when
-developer and tester use the same model vendor, because the tester is less
-independent then.
+`doctor` checks `git`, `gh` and its login, the agent CLIs, herdr (when used) and
+the user, repository and local config, and prints a `fix:` line for every
+problem. It also warns when developer and tester use the same model vendor,
+because the tester is less independent then.
 
-### 2. Write the issue as a contract
+### 3. Write the issue as a contract
 
 The issue body is the only specification. It needs fixed sections and numbered
 acceptance criteria, each with Given, When, Then and a concrete Example:
@@ -251,7 +284,7 @@ gdt check-issue --body-file body.md    # a draft, without calling GitHub
 Your agent can help write the body with the issue-writer instructions in
 [`roles/issue-writer.md`](roles/issue-writer.md).
 
-### 3. Start it from your agent
+### 4. Start it from your agent
 
 Just ask your coding agent, in your own language:
 
@@ -269,7 +302,7 @@ gdt wait 251      # blocks until the workflow needs attention
 gdt status 251    # one line plus the next step
 ```
 
-### 4. Answer, steer, merge
+### 5. Answer, steer, merge
 
 | Situation | What you (or your agent) run |
 |---|---|
@@ -295,7 +328,7 @@ changes product behaviour makes the role ask for the issue body to be updated.
 | `awaiting_human` | a role asked a question | `gdt answer <n> <question-id> "<text>"` |
 | `blocked` | a gate failed or a role reported blocked; the reason says why | follow the hint, e.g. `gdt allow-round <n>` |
 | `contract_changed` | the issue body changed; evidence is reset | wait |
-| `failed` | an agent turn exited non-zero | `gdt retry <n>` |
+| `failed` | an agent turn exited non-zero | `gdt retry <n>`, then `gdt start <n>` |
 | `paused` / `stopped` | you paused or stopped it | `gdt resume <n>` / `gdt start <n>` |
 | `ready_to_merge` | all gates passed | review and merge the PR |
 
@@ -306,7 +339,7 @@ Every command supports `--help`; `status` and `wait` also support `--json`.
 | Command | Effect |
 |---|---|
 | `gdt init` | Write the roles to the user config and `.gdt/config.toml`, install the operator skill |
-| `gdt doctor` | Check tools, GitHub login, agents, herdr and `.gdt/config.toml` |
+| `gdt doctor` | Check tools, GitHub login, agents, herdr and the user, repository and local config |
 | `gdt check-issue <n>` | Validate an issue body against the contract |
 | `gdt start <n>` | Preflight, start the supervisor and workers, return |
 | `gdt status <n>` | Status, role, round, open findings and next step |
@@ -374,6 +407,20 @@ the three files empty so you can see where your rules go; commit them like
 
 How each agent CLI is invoked is documented in [docs/agents.md](docs/agents.md).
 
+## Upgrading
+
+### From 0.3 to 0.4
+
+Since 0.4.0, `[roles.*]` in `.gdt/config.toml` is an error and `gdt start`
+refuses to run. Roles now live in the user config. To upgrade:
+
+1. Move the three role tables to the user config. Run `gdt init --force` with
+   the three role options (see [Quick start](#quick-start)) to write them to
+   `~/.config/gdt/config.toml`, or `$XDG_CONFIG_HOME/gdt/config.toml` when
+   `XDG_CONFIG_HOME` is set.
+2. Remove the `[roles.*]` tables from `.gdt/config.toml`.
+3. Run `gdt doctor` to check that the configuration is valid again.
+
 ## Watching it: herdr or headless
 
 ```text
@@ -390,6 +437,51 @@ How each agent CLI is invoked is documented in [docs/agents.md](docs/agents.md).
 Everything gdt keeps for an issue lives under `.git/gdt/issue-<n>/`: `state.json`
 (the workflow state), `logs/` (one log per process) and `runs/` (the prompt and
 result of every turn). It is never committed.
+
+### Notifications
+
+When a workflow needs you, gdt notifies you through the first of
+`terminal-notifier`, `osascript` (macOS) or `notify-send` (Linux) that is on
+`PATH` and works. If none of them is available, the notification is only
+written to `.git/gdt/issue-<n>/logs/supervisor.log`, and `gdt wait` is the way
+to be told: it blocks until the workflow needs attention.
+
+## The checkout during and after a workflow
+
+The roles work in the checkout where you run `gdt start`: the developer checks
+out the feature branch there, and the tester and reviewer read that same working
+tree. `gdt start` needs a **clean working tree** and refuses to run otherwise
+("Commit or stash before starting."), so commit or stash first. Do not edit that
+checkout while a workflow runs; if you want to keep working, use a separate
+clone for gdt.
+
+After `ready_to_merge`, or after `gdt stop`, two things stay behind:
+
+- the herdr workspace `gdt-<n>`, which you can close yourself in herdr;
+- the state directory `.git/gdt/issue-<n>/`, which you may delete once the pull
+  request is merged and no gdt process for that issue is running.
+
+## Troubleshooting
+
+When a turn fails or a workflow stops unexpectedly, start with:
+
+```bash
+gdt status <n>
+gdt doctor
+```
+
+`gdt status <n>` shows the status, role, round and next step; `gdt doctor`
+reports a `fix:` line for every configuration or tool problem.
+
+Everything gdt keeps for an issue is under the state directory: one log per
+process in `.git/gdt/issue-<n>/logs/`, and the prompt and result of every turn
+in `.git/gdt/issue-<n>/runs/`.
+
+- **exit code 78** means the configuration was invalid or the turn's prompt
+  could not be built. Run `gdt doctor`, fix what it reports, then
+  `gdt retry <n>` and `gdt start <n>`.
+- **any other non-zero exit code** means the agent CLI itself failed; its log
+  under `.git/gdt/issue-<n>/logs/` shows why.
 
 ## Principles
 
@@ -413,7 +505,7 @@ npm ci
 npm run build
 npm run lint
 npm test
-node dist/cli.js doctor   # run inside a repository with .gdt/config.toml
+node dist/cli.js doctor   # run in a repository configured for gdt (user + repository + local config)
 ```
 
 Rules for agents working on this repository: [AGENTS.md](AGENTS.md).
