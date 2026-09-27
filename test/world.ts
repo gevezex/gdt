@@ -86,13 +86,28 @@ export interface Options {
   terminal?: "headless" | "herdr";
   /** `workflow.supervisor_pane`; omitted when undefined, so the gdt default applies. */
   supervisorPane?: boolean;
+  /** `workflow.herdr_layout`; omitted when undefined, so the gdt default (`split`) applies. */
+  herdrLayout?: "split" | "tabs";
+  /** Per-role agent names for the config; roles without one use the `fake` test agent. */
+  roleAgents?: Partial<Record<"developer" | "tester" | "reviewer", string>>;
   /** Makes the fake herdr's `pane report-agent` exit non-zero (AC-6). */
   reportFail?: boolean;
   extraFiles?: Record<string, string>;
 }
 
-export function config(handoffChecks: number, terminal: "headless" | "herdr" = "headless", supervisorPane?: boolean): string {
-  const role = (name: string) => `[roles.${name}]\nagent = "fake"\nmodel = "none"\nscript = "scripts/${name}.sh"\n`;
+export function config(
+  handoffChecks: number,
+  terminal: "headless" | "herdr" = "headless",
+  supervisorPane?: boolean,
+  herdrLayout?: "split" | "tabs",
+  roleAgents?: Partial<Record<"developer" | "tester" | "reviewer", string>>,
+): string {
+  const role = (name: "developer" | "tester" | "reviewer") => {
+    const agent = roleAgents?.[name] ?? "fake";
+    const lines = [`[roles.${name}]`, `agent = "${agent}"`, `model = "none"`];
+    if (agent === "fake") lines.push(`script = "scripts/${name}.sh"`);
+    return `${lines.join("\n")}\n`;
+  };
   return [
     'language = "en"',
     "",
@@ -103,6 +118,7 @@ export function config(handoffChecks: number, terminal: "headless" | "herdr" = "
     'required_checks = ["ci"]',
     `terminal = "${terminal}"`,
     ...(supervisorPane === undefined ? [] : [`supervisor_pane = ${supervisorPane}`]),
+    ...(herdrLayout === undefined ? [] : [`herdr_layout = "${herdrLayout}"`]),
     "poll_seconds = 0.1",
     `handoff_checks = ${handoffChecks}`,
     "",
@@ -111,7 +127,13 @@ export function config(handoffChecks: number, terminal: "headless" | "herdr" = "
 
 export function world(options: Options = {}): World {
   const root = tempRepo({
-    ".gdt/config.toml": config(options.handoffChecks ?? 5, options.terminal ?? "headless", options.supervisorPane),
+    ".gdt/config.toml": config(
+      options.handoffChecks ?? 5,
+      options.terminal ?? "headless",
+      options.supervisorPane,
+      options.herdrLayout,
+      options.roleAgents,
+    ),
     "scripts/developer.sh": options.developer ?? "exit 0\n",
     "scripts/tester.sh": options.tester ?? "/bin/sleep 60\n",
     "scripts/reviewer.sh": "/bin/sleep 60\n",
@@ -218,6 +240,7 @@ export const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
 export interface HerdrPane {
   pane_id: string;
   workspace_id: string;
+  tab_id?: string;
   label: string;
   pid: number | null;
   /** Left edge and width as fractions of the tab width. */
@@ -227,10 +250,21 @@ export interface HerdrPane {
   agent_status?: string;
   agent?: string;
   agent_source?: string;
+  /** Set by `pane report-metadata --display-agent` (AC-1). */
+  display_agent?: string;
+}
+
+export interface HerdrTab {
+  tab_id: string;
+  workspace_id: string;
+  label: string;
+  number?: number;
+  pane_count?: number;
 }
 
 interface HerdrState {
   workspaces: Record<string, { workspace_id: string; label: string; cwd: string }>;
+  tabs: Record<string, HerdrTab>;
   panes: Record<string, HerdrPane>;
 }
 
@@ -245,6 +279,28 @@ export function herdrWorkspaces(w: World): HerdrState["workspaces"] {
 
 export function herdrPanes(w: World): HerdrPane[] {
   return Object.values(herdrState(w).panes);
+}
+
+/** The workspace's tabs, in the fake herdr's order, with their pane count. */
+export function herdrTabs(w: World): HerdrTab[] {
+  const state = herdrState(w);
+  return Object.values(state.tabs).map((tab) => ({
+    ...tab,
+    pane_count: Object.values(state.panes).filter((pane) => pane.tab_id === tab.tab_id).length,
+  }));
+}
+
+/** The label of the tab that holds the named pane, or "" when the pane is unknown. */
+export function herdrTabOf(w: World, name: string): string {
+  const paneId = herdrPaneIds(w)[name];
+  const pane = paneId === undefined ? undefined : herdrState(w).panes[paneId];
+  return pane?.tab_id === undefined ? "" : (herdrState(w).tabs[pane.tab_id]?.label ?? "");
+}
+
+/** The display-only agent label gdt last set for the named pane. */
+export function herdrDisplayAgent(w: World, name: string): string {
+  const paneId = herdrPaneIds(w)[name];
+  return paneId === undefined ? "" : (herdrState(w).panes[paneId]?.display_agent ?? "");
 }
 
 /** Pane ids by the name gdt gave them, from `.git/gdt/issue-12/panes.json`. */
