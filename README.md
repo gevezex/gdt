@@ -2,9 +2,9 @@
 
 **GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.**
 
-> Status: early development, used daily on this repository (see
-> [docs/dogfooding.md](docs/dogfooding.md)). Nothing is published to npm yet;
-> install from source. Background: [docs/design.md](docs/design.md).
+> Status: early development (0.x), used daily on this repository (see
+> [docs/dogfooding.md](docs/dogfooding.md)). Background:
+> [docs/design.md](docs/design.md).
 
 gdt takes one GitHub issue and runs it through three independent agent roles
 until a single draft pull request is ready to merge, or until it needs your
@@ -126,7 +126,14 @@ evidence too.
 
 ## Install
 
-Not on npm yet (planned: `npm i -g @gevezex/gdt`). From source:
+```bash
+npm i -g @gevezex/gdt
+gdt --version
+```
+
+Or run it once without installing: `npx @gevezex/gdt doctor`.
+
+From source instead:
 
 ```bash
 git clone https://github.com/gevezex/gdt.git
@@ -134,7 +141,6 @@ cd gdt
 npm ci
 npm run build
 npm link          # puts `gdt` on your PATH
-gdt --version
 ```
 
 Then install the operator skill, so your coding agent knows how to drive gdt:
