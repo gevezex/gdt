@@ -60,6 +60,8 @@ export interface State {
   contract: { sha256: string; changelog: string } | null;
   dispatched: string[];
   inflight: Inflight | null;
+  /** The dispatch key of an already-ran block; `gdt retry` removes it from `dispatched`. */
+  blocked_key?: string | null;
   notified_status: Status | null;
   /** Per role, the highest comment id seen at its previous dispatch; later directives are pending. */
   directive_cursor?: Partial<Record<Role, number>>;
