@@ -5,6 +5,8 @@ export const omp: Adapter = {
   binary: "omp",
   title: "omp",
   install: "Install omp: https://omp.sh",
+  modelFormat: "provider/id",
+  modelExample: "openai/gpt-5.2",
   buildInvocation: (_role, model, promptFile) => ({
     argv: ["omp", "--print", "--model", model, "--no-session", "--auto-approve"],
     env: {},

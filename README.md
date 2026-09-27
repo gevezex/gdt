@@ -156,27 +156,21 @@ It copies `skill/SKILL.md` into the skill directory of every agent CLI it finds
 
 ### 1. Configure the target repository
 
-In the repository you want gdt to work on, commit `.gdt/config.toml`:
+In the repository you want gdt to work on, create `.gdt/config.toml` with
+`gdt init` instead of writing TOML by hand. Ask your coding agent, or run it
+yourself:
 
-```toml
-language = "en"                  # language for issue and PR text: "en" or "nl"
-
-[roles.developer]
-agent = "opencode"
-model = "deepseek/deepseek-v4-flash"
-
-[roles.tester]
-agent = "claude"
-model = "claude-sonnet-5"
-
-[roles.reviewer]
-agent = "codex"
-model = "gpt-5.6-luna"
-
-[workflow]
-required_checks = ["test"]       # CI check names that must be green
-terminal = "herdr"               # or "headless"
+```bash
+gdt init --developer opencode/deepseek/deepseek-v4-flash \
+         --tester claude/claude-sonnet-5 \
+         --reviewer codex/gpt-5.6-luna
 ```
+
+`gdt init` writes the config, runs `gdt doctor` and installs the operator skill.
+Without the three role options it only reports what it found (agents on `PATH`,
+the terminal, the detected CI checks) so your agent can discuss the roles with
+you first. It never overwrites an existing config without `--force`, and it
+requires at least one required check unless you pass `--allow-no-required-checks`.
 
 Then check your setup:
 
@@ -292,6 +286,7 @@ Every command supports `--help`; `status` and `wait` also support `--json`.
 
 | Command | Effect |
 |---|---|
+| `gdt init` | Create `.gdt/config.toml` and install the operator skill |
 | `gdt doctor` | Check tools, GitHub login, agents, herdr and `.gdt/config.toml` |
 | `gdt check-issue <n>` | Validate an issue body against the contract |
 | `gdt start <n>` | Preflight, start the supervisor and workers, return |

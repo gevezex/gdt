@@ -24,6 +24,10 @@ export interface Adapter {
   title: string;
   /** Recovery hint when the binary is missing. */
   install: string;
+  /** How a model id is shaped for this agent, shown by `gdt init` (docs/agents.md). */
+  modelFormat: string;
+  /** One example model id, shown by `gdt init`. gdt ships no default model. */
+  modelExample: string;
   buildInvocation(role: Role, model: string, promptFile: string, cwd: string): Invocation;
   /** The model provider, used to warn about correlated developer and tester models. */
   vendorOf(model: string): string;

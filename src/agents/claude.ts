@@ -5,6 +5,8 @@ export const claude: Adapter = {
   binary: "claude",
   title: "Claude Code",
   install: "Install Claude Code: https://docs.anthropic.com/en/docs/claude-code",
+  modelFormat: "<model>",
+  modelExample: "claude-sonnet-5",
   buildInvocation: (_role, model, promptFile) => ({
     argv: ["claude", "-p", "--model", model, "--permission-mode", "bypassPermissions", "--no-session-persistence"],
     env: {},
