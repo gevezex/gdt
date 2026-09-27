@@ -12,6 +12,7 @@ import { type Directive, pendingDirectives } from "./prompts.js";
 import { parseRecords, type ProtocolRecord } from "./protocol.js";
 import {
   acquireLock,
+  logTimestamp,
   NOTIFY_STATUSES,
   type Paths,
   paths,
@@ -87,7 +88,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function log(line: string): void {
-  process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+  process.stdout.write(`${logTimestamp()} ${line}\n`);
 }
 
 class Supervisor {

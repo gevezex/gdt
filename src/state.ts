@@ -115,6 +115,15 @@ export function paths(root: string, issue: number, env: Env): Paths {
   };
 }
 
+/** A log line timestamp in local time, `YYYY-MM-DD hh:mm:ss`. */
+export function logTimestamp(date: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
 /** Writes via a temporary file and rename, so readers never see a partial file. */
 export function writeJsonAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });

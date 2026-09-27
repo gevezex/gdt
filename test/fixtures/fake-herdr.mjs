@@ -121,7 +121,7 @@ try {
       const cwd = flag("--cwd") ?? process.cwd();
       state.workspaces[workspace_id] = { workspace_id, label: flag("--label") ?? String(n), cwd };
       state.tabs[tab_id] = { tab_id, workspace_id };
-      state.panes[pane_id] = { pane_id, workspace_id, tab_id, label: "", cwd, pid: null };
+      state.panes[pane_id] = { pane_id, workspace_id, tab_id, label: "", cwd, pid: null, x: 0, width: 1 };
       return ok({
         type: "workspace_created",
         workspace: state.workspaces[workspace_id],
@@ -151,7 +151,13 @@ try {
       const workspaceId = anchor.workspace_id;
       const n = nextId(`${workspaceId}:p`, paneIdsIn(state, workspaceId));
       const pane_id = `${workspaceId}:p${n}`;
-      state.panes[pane_id] = { pane_id, workspace_id: workspaceId, tab_id: anchor.tab_id, label: "", cwd: anchor.cwd, pid: null };
+      // Horizontal layout as fractions of the tab width: the anchor keeps `--ratio` (default 0.5) of
+      // its width and the new pane takes the rest, directly to its right.
+      const ratio = Number(flag("--ratio") ?? 0.5);
+      const x = anchor.x + anchor.width * ratio;
+      const width = anchor.width * (1 - ratio);
+      anchor.width *= ratio;
+      state.panes[pane_id] = { pane_id, workspace_id: workspaceId, tab_id: anchor.tab_id, label: "", cwd: anchor.cwd, pid: null, x, width };
       return ok({ type: "pane_info", pane: paneInfo(state.panes[pane_id]) });
     }
 

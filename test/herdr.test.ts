@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { alive } from "../src/state.js";
+import { alive, logTimestamp } from "../src/state.js";
 import { sha256 } from "../src/supervisor.js";
 import { EXAMPLE_CONFIG, fakePath, gdt as cliGdt, tempRepo } from "./helpers.js";
 import {
@@ -8,6 +8,7 @@ import {
   gdt,
   HEAD,
   herdrCalls,
+  herdrLayout,
   herdrPaneIds,
   herdrPaneLog,
   herdrPanes,
@@ -50,6 +51,36 @@ describe("AC-1: start creates the workspace with four panes", { timeout: 30_000 
     // The developer pane starts WAITING (it may already be RUNNING by the time we look).
     const pane = herdrPaneIds(w).developer;
     expect(herdrTitles(w).filter((title) => title.pane_id === pane).map((title) => title.label)).toContain("developer · fake · WAITING");
+  });
+});
+
+describe("panes run left to right in role order with equal widths", { timeout: 30_000 }, () => {
+  it("lays out supervisor, developer, tester and reviewer at a quarter each", async () => {
+    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await waitFor("four panes", () => herdrPanes(w).length === 4);
+
+    const ids = herdrPaneIds(w);
+    const layout = herdrLayout(w);
+    expect(layout.map((pane) => pane.pane_id)).toEqual(ROLES.map((role) => ids[role]));
+    for (const pane of layout) expect(pane.width).toBeCloseTo(0.25, 3);
+  });
+});
+
+describe("pane output uses a short local timestamp", { timeout: 30_000 }, () => {
+  it("prefixes supervisor and worker lines with YYYY-MM-DD hh:mm:ss", async () => {
+    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await waitFor("output in every pane", () => ROLES.every((role) => herdrPaneLog(w, role).trim() !== ""));
+    for (const role of ROLES) {
+      const first = herdrPaneLog(w, role).split("\n")[0] ?? "";
+      expect(first).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \S/);
+    }
+  });
+
+  it("formats a date in local time", () => {
+    const date = new Date(2026, 8, 7, 5, 4, 3, 999);
+    expect(logTimestamp(date)).toBe("2026-09-07 05:04:03");
   });
 });
 

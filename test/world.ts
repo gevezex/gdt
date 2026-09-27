@@ -213,6 +213,9 @@ export interface HerdrPane {
   workspace_id: string;
   label: string;
   pid: number | null;
+  /** Left edge and width as fractions of the tab width. */
+  x: number;
+  width: number;
 }
 
 interface HerdrState {
@@ -243,6 +246,13 @@ export function herdrPaneIds(w: World): Record<string, string> {
 export function herdrTitle(w: World, name: string): string {
   const paneId = herdrPaneIds(w)[name];
   return paneId === undefined ? "" : (herdrState(w).panes[paneId]?.label ?? "");
+}
+
+/** The panes of the fake herdr tab from left to right, with their width as a fraction of the tab. */
+export function herdrLayout(w: World): { pane_id: string; width: number }[] {
+  return Object.values(herdrState(w).panes)
+    .sort((a, b) => a.x - b.x)
+    .map((pane) => ({ pane_id: pane.pane_id, width: pane.width }));
 }
 
 /** Every `pane rename` in order, for asserting a title transition. */
