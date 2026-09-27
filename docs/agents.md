@@ -1,9 +1,11 @@
 # Terminal backends
 
 `workflow.terminal` selects how the supervisor and the three role workers are run. `headless` uses
-detached processes with one log file per pane under `.git/gdt/issue-<n>/logs`. `herdr` runs them in
-four panes of one herdr workspace named `gdt-<issue>` (design 9.6); pane titles are
-`<role> · <agent> · <STATE>` and `supervisor · <status>`.
+detached processes with one log file per pane under `.git/gdt/issue-<n>/logs`. `herdr` runs the three
+role workers in panes of one herdr workspace named `gdt-<issue>` (design 9.6); pane titles are
+`<role> · <agent> · <STATE>`. By default the supervisor has no pane: it runs detached and writes
+`logs/supervisor.log`, like headless. Set `workflow.supervisor_pane = true` to give the supervisor a
+pane as well (title `supervisor · <status>`), as before this option existed.
 
 The minimum supported herdr version is **0.9.1**, the version the workspace, pane and title commands
 this backend uses were verified against. `gdt doctor` reports an error when herdr is missing, cannot

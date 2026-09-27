@@ -35,7 +35,7 @@ function herdrRead(w: World, paneId: string, lines: number): string {
 
 describe("AC-1: a waiting role pane is cleared but keeps its scrollback", { timeout: 30_000 }, () => {
   it("shows the waiting line after a turn and still reads the turn's output", async () => {
-    const w = world({ terminal: "herdr", developer: "printf 'developer-turn-output\\n'; exit 0\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "printf 'developer-turn-output\\n'; exit 0\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the developer waiting line", () => herdrPaneLog(w, "developer").includes(`${DIM}developer waiting · last turn DONE`));
 
@@ -54,14 +54,14 @@ describe("AC-1: a waiting role pane is cleared but keeps its scrollback", { time
 
 describe("AC-2: the waiting line names the last result", { timeout: 30_000 }, () => {
   it("is dim, names the role, and says no turn ran yet", async () => {
-    const w = world({ terminal: "herdr", developer: "printf 'developer-turn-output\\n'; exit 0\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "printf 'developer-turn-output\\n'; exit 0\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the tester waiting line", () => herdrPaneLog(w, "tester").includes("tester waiting · no turn yet"));
     expect(herdrPaneLog(w, "tester")).toContain(`${DIM}tester waiting · no turn yet${RESET}`);
   });
 
   it("names the last turn state and its time", async () => {
-    const w = world({ terminal: "herdr", developer: "printf 'developer-turn-output\\n'; exit 0\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "printf 'developer-turn-output\\n'; exit 0\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the developer waiting line", () => herdrPaneLog(w, "developer").includes(`${DIM}developer waiting · last turn DONE `));
 
@@ -74,7 +74,7 @@ describe("AC-2: the waiting line names the last result", { timeout: 30_000 }, ()
   });
 
   it("names the last turn again after a stop and start", async () => {
-    const w = world({ terminal: "herdr", developer: "printf 'developer-turn-output\\n'; exit 0\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "printf 'developer-turn-output\\n'; exit 0\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the first waiting line", () => herdrPaneLog(w, "developer").includes(`${DIM}developer waiting · last turn DONE`));
 
@@ -87,7 +87,7 @@ describe("AC-2: the waiting line names the last result", { timeout: 30_000 }, ()
 
 describe("AC-3: a starting turn clears the pane and uses normal colours", { timeout: 30_000 }, () => {
   it("clears and resets colours before the agent's output", async () => {
-    const w = world({ terminal: "herdr", developer: "printf 'developer-turn-output\\n'; exit 0\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "printf 'developer-turn-output\\n'; exit 0\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the developer waiting line", () => herdrPaneLog(w, "developer").includes(`${DIM}developer waiting · last turn DONE`));
 
@@ -100,7 +100,7 @@ describe("AC-3: a starting turn clears the pane and uses normal colours", { time
 
 describe("AC-4: role panes report their state to herdr", { timeout: 30_000 }, () => {
   it("reports working and idle with source gdt and the agent label", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 0\n", handoffChecks: 5 });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 0\n", handoffChecks: 5 });
     expect(gdt(w, "start", "12").code).toBe(0);
 
     const pane = paneId(w, "developer");
@@ -114,7 +114,7 @@ describe("AC-4: role panes report their state to herdr", { timeout: 30_000 }, ()
   });
 
   it("reports blocked for a failed turn", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 3\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 3\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the failure", () => stateOf(w).status === "failed");
 
@@ -142,7 +142,7 @@ describe("AC-5: the supervisor pane shows when the user is needed", { timeout: 3
   });
 
   it("reports blocked for failed and idle for stopped, as source gdt with label gdt", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 3\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 3\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the failure", () => stateOf(w).status === "failed");
     expect(herdrAgentStatus(w, "supervisor")).toBe("blocked");
@@ -156,7 +156,7 @@ describe("AC-5: the supervisor pane shows when the user is needed", { timeout: 3
 
 describe("AC-6: a failing report does not affect the workflow", { timeout: 30_000 }, () => {
   it("warns once and still fails the turn", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 3\n", reportFail: true });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 3\n", reportFail: true });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the failure", () => stateOf(w).status === "failed");
 

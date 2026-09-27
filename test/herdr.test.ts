@@ -37,7 +37,7 @@ function record(kind: string, data: Record<string, unknown>): string {
 
 describe("AC-1: start creates the workspace with four panes", { timeout: 30_000 }, () => {
   it("creates gdt-12 with one pane per role, each running its gdt process", async () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("four panes and three workers", () => herdrPanes(w).length === 4 && Object.keys(stateOf(w).pids.workers).length === 3);
 
@@ -56,7 +56,7 @@ describe("AC-1: start creates the workspace with four panes", { timeout: 30_000 
 
 describe("panes run left to right in role order with equal widths", { timeout: 30_000 }, () => {
   it("lays out supervisor, developer, tester and reviewer at a quarter each", async () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("four panes", () => herdrPanes(w).length === 4);
 
@@ -69,7 +69,7 @@ describe("panes run left to right in role order with equal widths", { timeout: 3
 
 describe("pane output uses a short local timestamp", { timeout: 30_000 }, () => {
   it("prefixes supervisor and worker lines with YYYY-MM-DD hh:mm:ss", async () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("output in every pane", () => ROLES.every((role) => herdrPaneLog(w, role).trim() !== ""));
     for (const role of ROLES) {
@@ -86,7 +86,7 @@ describe("pane output uses a short local timestamp", { timeout: 30_000 }, () => 
 
 describe("AC-2: start works from outside herdr", { timeout: 30_000 }, () => {
   it("returns and prints the attach command for gdt-12", () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     const result = gdt(w, "start", "12");
     expect(result.code).toBe(0);
     const workspace = Object.values(herdrWorkspaces(w)).find((candidate) => candidate.label === "gdt-12");
@@ -131,7 +131,7 @@ describe("AC-3: missing herdr is reported with an alternative", () => {
 
 describe("AC-4: a second start reuses the workspace", { timeout: 30_000 }, () => {
   it("keeps one workspace with exactly four gdt panes", async () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("four panes", () => herdrPanes(w).length === 4);
     const before = herdrPaneIds(w);
@@ -148,7 +148,7 @@ describe("AC-4: a second start reuses the workspace", { timeout: 30_000 }, () =>
 
 describe("AC-5: pane titles follow the role state", { timeout: 30_000 }, () => {
   it("shows WAITING then RUNNING then DONE for a successful turn", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 0\n", handoffChecks: 5 });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 0\n", handoffChecks: 5 });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the DONE title", () => herdrTitle(w, "developer") === "developer · fake · DONE");
 
@@ -162,7 +162,7 @@ describe("AC-5: pane titles follow the role state", { timeout: 30_000 }, () => {
   });
 
   it("shows FAILED for a failed turn", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 3\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 3\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("failed", () => stateOf(w).status === "failed");
     expect(herdrTitle(w, "developer")).toBe("developer · fake · FAILED");
@@ -171,7 +171,7 @@ describe("AC-5: pane titles follow the role state", { timeout: 30_000 }, () => {
 
 describe("AC-6: stop leaves an explanatory last line", { timeout: 30_000 }, () => {
   it("ends every process, sets STOPPED titles and writes the resume line", async () => {
-    const w = world({ terminal: "herdr", developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the developer turn", () => stateOf(w).role === "developer" && stateOf(w).inflight !== null);
 
@@ -189,7 +189,7 @@ describe("AC-6: stop leaves an explanatory last line", { timeout: 30_000 }, () =
 
 /** A world whose PR #40 already has an approved handoff, test and review for HEAD, with green checks. */
 async function approvedWorld(terminal: "headless" | "herdr") {
-  const w = world({ terminal, developer: "/bin/sleep 60\n", pr: true });
+  const w = world({ terminal, supervisorPane: terminal === "herdr", developer: "/bin/sleep 60\n", pr: true });
   const base = { repository: "gevezex/demo", issue: 12, round: 0, pr_number: 40, issue_body_sha256: sha256(BODY) };
   const acResults = [
     { ac: "AC-1", result: "passed", evidence: "fake" },
@@ -255,7 +255,7 @@ describe("headless mode keeps its workers after ready_to_merge", { timeout: 30_0
 
 describe("herdr agent-state is display only", { timeout: 30_000 }, () => {
   it("is never read by the supervisor", async () => {
-    const w = world({ terminal: "herdr", developer: "exit 0\n", handoffChecks: 5 });
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "exit 0\n", handoffChecks: 5 });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("the DONE title", () => herdrTitle(w, "developer") === "developer · fake · DONE");
 
