@@ -78,6 +78,8 @@ export interface Paths {
   lock: string;
   /** Existence means the workflow is paused; written by `gdt pause`, removed by `gdt resume`. */
   pause: string;
+  /** Holds the pid of a running `gdt stop` or `gdt retry`; its stop window is not a dead supervisor. */
+  stopping: string;
   /** Per-issue agent/model overrides written by `gdt set-agent`, kept out of `state.json`. */
   overrides: string;
   logs: string;
@@ -106,6 +108,7 @@ export function paths(root: string, issue: number, env: Env): Paths {
     state: join(dir, "state.json"),
     lock: join(dir, "supervisor.lock"),
     pause: join(dir, "paused"),
+    stopping: join(dir, "stopping"),
     overrides: join(dir, "overrides.json"),
     logs: join(dir, "logs"),
     panes: join(dir, "panes.json"),

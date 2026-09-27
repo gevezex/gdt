@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
 import { headless } from "./backends/headless.js";
 import { type Backend, backendFor } from "./backends/index.js";
@@ -141,9 +141,25 @@ function loadBackend(p: Paths, issue: number, env: Env): Backend {
  * is still a waiting status (AC-4 would otherwise fire for a deliberate stop).
  */
 export function stopProcesses(p: Paths, state: State, env: Env): void {
+  // The stop window starts here; `gdt wait` keeps waiting while this process lives (see stopInProgress).
+  mkdirSync(p.dir, { recursive: true });
+  writeFileSync(p.stopping, `${process.pid}\n`);
   const backend = loadBackend(p, state.issue, env);
   const pids = [lockHolder(p), state.pids.supervisor, ...ROLES.map((role) => state.pids.workers[role])];
   for (const pid of new Set(pids)) if (pid !== null && pid !== undefined && alive(pid)) backend.close(pid);
+}
+
+/** Ends the stop window: releases the lock after the final state is written, then the stop marker. */
+function releaseAfterStop(p: Paths): void {
+  rmSync(p.lock, { force: true });
+  rmSync(p.stopping, { force: true });
+}
+
+/** True while a live `gdt stop` or `gdt retry` is between ending the supervisor and writing the final state. */
+function stopInProgress(p: Paths): boolean {
+  if (!existsSync(p.stopping)) return false;
+  const pid = Number(readFileSync(p.stopping, "utf8").trim());
+  return Number.isInteger(pid) && alive(pid);
 }
 
 /** AC-6: after stopping, every herdr pane shows STOPPED; the gdt processes printed the last line. */
@@ -175,7 +191,7 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
   else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });
   writeState(p, state);
   // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
-  rmSync(p.lock, { force: true });
+  releaseAfterStop(p);
   markStopped(p, issue, env);
   // The printed next step is exactly what `gdt status` reports after this command.
   return ok(`Stopped #${issue}. Next: ${describe(state, false).next}\n`);
@@ -214,7 +230,7 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
   });
   writeState(p, state);
   // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
-  rmSync(p.lock, { force: true });
+  releaseAfterStop(p);
   return ok(`Retry prepared for #${issue}. Next: ${describe(state, false).next}\n`);
 }
 
@@ -313,7 +329,8 @@ export function wait(issue: number, cwd: string, env: Env, options: WaitOptions)
     const effective = effectiveState(p, state);
     if (ACTION_STATUSES.includes(effective.status)) return status(issue, cwd, env, options.json);
     // A dead supervisor ends the wait, except while the operator paused it deliberately (AC-4).
-    if (effective.status !== "paused" && lockHolder(p) === null) return status(issue, cwd, env, options.json);
+    // A deliberate stop is not a dead supervisor: its final state follows once the stop window ends.
+    if (effective.status !== "paused" && lockHolder(p) === null && !stopInProgress(p)) return status(issue, cwd, env, options.json);
     if (deadline !== null && Date.now() >= deadline) {
       return fail(`still ${effective.status} after ${options.timeoutSeconds} s. Next: gdt wait ${issue}\n`);
     }
