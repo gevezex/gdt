@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
+import { readUserConfig } from "../src/config.js";
 import { which } from "../src/doctor.js";
 import { fakeHerdr, tempRepo, writeUserConfig } from "./helpers.js";
 
@@ -391,6 +392,50 @@ describe("AC-5 (issue #51): gdt init with role options writes the roles to the u
     expect(user).toContain("# keep this comment");
     expect(user).toContain('[roles.developer]\nagent = "opencode"\nmodel = "deepseek/deepseek-v4-flash"');
     expect(user).not.toContain('model = "old"');
+  });
+
+  // R-1: roles expressed as a `[roles]` table with inline entries must be replaced too, not only
+  // the `[roles.<role>]` table syntax, or the rewrite leaves a duplicate definition.
+  it("replaces roles written as inline tables under [roles] with --force", () => {
+    const root = tempRepo();
+    const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+    writeUserConfig(
+      home,
+      '[roles]\ndeveloper = { agent = "claude", model = "old-dev" }\ntester = { agent = "claude", model = "old-test" }\nreviewer = { agent = "claude", model = "old-rev" }\n',
+    );
+
+    const result = init([...SPECS, "--required-check", "test", "--force"], root, initPath(), home);
+
+    expect(result.code).toBe(0);
+    const user = readFileSync(join(home, USER_CONFIG), "utf8");
+    expect(user).not.toContain("old-dev");
+    expect(user).not.toContain("[roles]");
+    const reread = readUserConfig({ HOME: home });
+    expect(reread.findings).toEqual([]);
+    expect(reread.roles.developer).toMatchObject({ agent: "opencode", model: "deepseek/deepseek-v4-flash" });
+    expect(reread.roles.tester).toMatchObject({ agent: "claude", model: "claude-sonnet-5" });
+    expect(reread.roles.reviewer).toMatchObject({ agent: "codex", model: "gpt-5.6-luna" });
+  });
+
+  it("replaces roles written as a top-level inline table or dotted keys with --force", () => {
+    for (const text of [
+      'roles = { developer = { agent = "claude", model = "old-dev" }, tester = { agent = "claude", model = "old-test" }, reviewer = { agent = "claude", model = "old-rev" } }\n',
+      'roles.developer.agent = "claude"\nroles.developer.model = "old-dev"\nroles.tester.agent = "claude"\nroles.tester.model = "old-test"\nroles.reviewer.agent = "claude"\nroles.reviewer.model = "old-rev"\n',
+    ]) {
+      const root = tempRepo();
+      const home = mkdtempSync(join(tmpdir(), "gdt-init-home-"));
+      writeUserConfig(home, text);
+
+      const result = init([...SPECS, "--required-check", "test", "--force"], root, initPath(), home);
+
+      expect(result.code).toBe(0);
+      const user = readFileSync(join(home, USER_CONFIG), "utf8");
+      expect(user).not.toContain("old-dev");
+      const reread = readUserConfig({ HOME: home });
+      expect(reread.findings).toEqual([]);
+      expect(reread.roles.developer).toMatchObject({ agent: "opencode", model: "deepseek/deepseek-v4-flash" });
+      expect(reread.roles.reviewer).toMatchObject({ agent: "codex", model: "gpt-5.6-luna" });
+    }
   });
 });
 
