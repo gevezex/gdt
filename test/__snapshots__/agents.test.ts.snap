@@ -16,6 +16,25 @@ exports[`AC-2: Claude Code adapter matches its verified invocation > builds the 
 }
 `;
 
+exports[`AC-2: MCode adapter matches its verified invocation > builds the documented invocation 1`] = `
+{
+  "argv": [
+    "mcode",
+    "exec",
+    "--model",
+    "minimax/MiniMax-M3",
+    "--cwd",
+    "/work/repo",
+    "--permission",
+    "full",
+    "--input",
+    "-",
+  ],
+  "env": {},
+  "stdin": "/tmp/p.md",
+}
+`;
+
 exports[`AC-3: Codex adapter matches its verified invocation > builds the documented invocation 1`] = `
 {
   "argv": [
@@ -28,6 +47,21 @@ exports[`AC-3: Codex adapter matches its verified invocation > builds the docume
     "--dangerously-bypass-approvals-and-sandbox",
     "--ephemeral",
     "-",
+  ],
+  "env": {},
+  "stdin": "/tmp/p.md",
+}
+`;
+
+exports[`AC-3: pi adapter matches its verified invocation > builds the documented invocation 1`] = `
+{
+  "argv": [
+    "pi",
+    "--print",
+    "--model",
+    "anthropic/claude-sonnet-4",
+    "--no-session",
+    "--no-approve",
   ],
   "env": {},
   "stdin": "/tmp/p.md",
@@ -48,5 +82,20 @@ exports[`AC-4: OpenCode adapter matches its verified invocation > builds the doc
   ],
   "env": {},
   "stdin": null,
+}
+`;
+
+exports[`AC-4: omp adapter matches its verified invocation > builds the documented invocation 1`] = `
+{
+  "argv": [
+    "omp",
+    "--print",
+    "--model",
+    "openai/gpt-5.2",
+    "--no-session",
+    "--auto-approve",
+  ],
+  "env": {},
+  "stdin": "/tmp/p.md",
 }
 `;

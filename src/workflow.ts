@@ -5,7 +5,7 @@ import { headless } from "./backends/headless.js";
 import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, ROLES } from "./config.js";
 import { validateContract } from "./contract.js";
-import { findRepository, herdrPreflight } from "./doctor.js";
+import { findRepository, herdrPreflight, unsupportedAgentFindings } from "./doctor.js";
 import { changedFiles } from "./git.js";
 import { issueBody, repository } from "./github.js";
 import { loadLocale } from "./locale.js";
@@ -57,6 +57,8 @@ export function start(issue: number, cwd: string, env: Env): CommandResult {
   if (root === null) return fail(`${cwd} is not inside a Git repository. Run gdt from a checkout of the target repository.\n`);
   const { report } = loadConfig(root, env);
   if (!report.valid) return fail('.gdt/config.toml is invalid. Run "gdt doctor" for details.\n');
+  const unsupported = unsupportedAgentFindings(report.roles);
+  if (unsupported.length > 0) return fail(`${unsupported.map((f) => f.message).join("\n")}\n`);
   if (report.workflow.terminal === "herdr") {
     const problem = herdrPreflight(env);
     if (problem !== null) return fail(`${problem}\n`);

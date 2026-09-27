@@ -9,6 +9,14 @@ export interface Invocation {
   stdin: string | null;
 }
 
+/**
+ * The vendor of a `provider/model` id: the prefix before `/`, or the id itself when it has no `/`.
+ * `"deepseek/deepseek-v4-flash"` is `deepseek`, `"sonnet"` is its own vendor.
+ */
+export function vendorFromModel(model: string): string {
+  return model.split("/")[0] ?? model;
+}
+
 export interface Adapter {
   /** The executable looked up on PATH. */
   binary: string;
