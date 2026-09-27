@@ -102,8 +102,12 @@ function createWorkspace(opts: HerdrOptions): { workspace_id: string; root_pane:
   return { workspace_id: workspace.workspace_id, root_pane: rootPane.pane_id };
 }
 
-function splitPane(opts: HerdrOptions, anchor: string): string {
-  const result = resultOf(call(["pane", "split", anchor, "--direction", "right", "--no-focus"], opts), "pane split");
+/** Splits `anchor` to the right; `ratio` is the share of the width that `anchor` keeps. */
+function splitPane(opts: HerdrOptions, anchor: string, ratio: number): string {
+  const result = resultOf(
+    call(["pane", "split", anchor, "--direction", "right", "--ratio", ratio.toFixed(4), "--no-focus"], opts),
+    "pane split",
+  );
   const pane = result.pane;
   if (!isRecord(pane) || typeof pane.pane_id !== "string") throw new Error("herdr pane split did not return a pane id");
   return pane.pane_id;
@@ -180,12 +184,22 @@ export function herdr(opts: HerdrOptions): Backend {
         }
       }
 
-      const anchor = Object.values(mapping).flatMap((p) => (p === undefined ? [] : [p.pane_id])).find((id) => id !== "");
-      for (const name of PANE_NAMES) {
-        if (mapping[name] !== undefined) continue;
+      // Each new pane is split off the right of the previous one, so panes run left to right in
+      // PANE_NAMES order. The anchor keeps 1/(panes still to fill), which makes a new workspace's
+      // panes equally wide.
+      const first = Object.values(mapping).flatMap((p) => (p === undefined ? [] : [p.pane_id])).find((id) => id !== "");
+      let previous: string | undefined;
+      PANE_NAMES.forEach((name, index) => {
+        const record = mapping[name];
+        if (record !== undefined) {
+          previous = record.pane_id;
+          return;
+        }
+        const anchor = previous ?? first;
         if (anchor === undefined) throw new Error(`herdr workspace ${workspaceId} has no pane to split`);
-        mapping[name] = { pane_id: splitPane(opts, anchor) };
-      }
+        previous = splitPane(opts, anchor, 1 / (PANE_NAMES.length - index + 1));
+        mapping[name] = { pane_id: previous };
+      });
 
       writePanes(opts.panesFile, { workspace_id: workspaceId, panes: mapping });
       rename("supervisor", roleTitle("supervisor", "", "starting"));

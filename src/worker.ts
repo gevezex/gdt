@@ -5,7 +5,7 @@ import { adapterFor, type Invocation } from "./agents/index.js";
 import { loadConfig, type ResolvedRole, type Role, TEST_AGENT, testAgentsEnabled } from "./config.js";
 import { changedFiles, type Checkout, checkout } from "./git.js";
 import { buildPrompt } from "./prompts.js";
-import { alive, paths, readJson, readOverrides, readState, writeJsonAtomic } from "./state.js";
+import { alive, logTimestamp, paths, readJson, readOverrides, readState, writeJsonAtomic } from "./state.js";
 import type { Dispatch, TurnResult } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
@@ -22,7 +22,7 @@ export function invocation(roleName: Role, role: ResolvedRole, root: string, pro
 }
 
 function log(line: string): void {
-  process.stdout.write(`${new Date().toISOString()} ${line}\n`);
+  process.stdout.write(`${logTimestamp()} ${line}\n`);
 }
 
 function sleep(ms: number): Promise<void> {
