@@ -14,4 +14,3 @@ model = "gpt-5.6-luna"
 
 [workflow]
 required_checks = ["test"]
-terminal = "headless"

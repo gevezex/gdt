@@ -86,7 +86,7 @@ export interface Options {
   terminal?: "headless" | "herdr";
   /** `workflow.supervisor_pane`; omitted when undefined, so the gdt default applies. */
   supervisorPane?: boolean;
-  /** `workflow.herdr_layout`; omitted when undefined, so the gdt default (`split`) applies. */
+  /** `workflow.herdr_layout`; omitted when undefined, so the gdt default (`tabs`) applies. */
   herdrLayout?: "split" | "tabs";
   /** Per-role agent names for the config; roles without one use the `fake` test agent. */
   roleAgents?: Partial<Record<"developer" | "tester" | "reviewer", string>>;

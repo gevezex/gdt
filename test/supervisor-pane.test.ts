@@ -64,7 +64,7 @@ describe("AC-1: workflow.supervisor_pane is a boolean that defaults to false", (
 
 describe("AC-2: without a supervisor pane herdr shows only the role panes", { timeout: 30_000 }, () => {
   it("creates three equal panes, left to right developer, tester, reviewer", async () => {
-    const w = world({ terminal: "herdr", supervisorPane: false, developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: false, herdrLayout: "split", developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
     await waitFor("three panes and three workers", () => herdrPanes(w).length === 3 && Object.keys(stateOf(w).pids.workers).length === 3);
 
@@ -108,7 +108,7 @@ describe("AC-3: the supervisor runs detached and writes the supervisor log", { t
 
 describe("AC-4: a leftover supervisor pane is closed", { timeout: 30_000 }, () => {
   it("closes the pane, keeps the three role panes and drops the panes.json entry", async () => {
-    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, herdrLayout: "split", developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("four panes", () => herdrPanes(w).length === 4);
     const before = herdrPaneIds(w);
@@ -117,7 +117,7 @@ describe("AC-4: a leftover supervisor pane is closed", { timeout: 30_000 }, () =
     expect(gdt(w, "stop", "12").code).toBe(0);
 
     // A migration: the workspace keeps its supervisor pane, the config no longer wants one.
-    writeFileSync(join(w.root, ".gdt/config.toml"), config(5, "herdr", false));
+    writeFileSync(join(w.root, ".gdt/config.toml"), config(5, "herdr", false, "split"));
     expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
     await waitFor("three panes", () => herdrPanes(w).length === 3);
 
@@ -129,7 +129,7 @@ describe("AC-4: a leftover supervisor pane is closed", { timeout: 30_000 }, () =
 
 describe("AC-5: supervisor_pane = true keeps the four-pane workspace", { timeout: 30_000 }, () => {
   it("lays out supervisor, developer, tester and reviewer at a quarter each and reports its state", async () => {
-    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: true, herdrLayout: "split", developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("four panes", () => herdrPanes(w).length === 4);
 

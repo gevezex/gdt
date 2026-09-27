@@ -67,16 +67,16 @@ describe("AC-1: the agents overview shows the role label", { timeout: 30_000 }, 
   });
 });
 
-describe("AC-2: workflow.herdr_layout is validated and defaults to split", () => {
-  it("defaults to split when the key is absent", () => {
+describe("AC-2: workflow.herdr_layout is validated and defaults to tabs", () => {
+  it("defaults to tabs when the key is absent", () => {
     const { code, report } = doctorJson(EXAMPLE_CONFIG);
-    expect(report.config.workflow.herdr_layout).toBe("split");
+    expect(report.config.workflow.herdr_layout).toBe("tabs");
     expect(code).toBe(0);
   });
 
-  it("accepts tabs", () => {
-    const { code, report } = doctorJson(EXAMPLE_CONFIG.replace('terminal = "herdr"', 'terminal = "herdr"\nherdr_layout = "tabs"'));
-    expect(report.config.workflow.herdr_layout).toBe("tabs");
+  it("accepts split", () => {
+    const { code, report } = doctorJson(EXAMPLE_CONFIG.replace('terminal = "herdr"', 'terminal = "herdr"\nherdr_layout = "split"'));
+    expect(report.config.workflow.herdr_layout).toBe("split");
     expect(code).toBe(0);
   });
 
@@ -134,7 +134,7 @@ describe("AC-3: with tabs, a new workspace gets one tab per managed pane", { tim
 
 describe("AC-4: with split, the layout is unchanged", { timeout: 30_000 }, () => {
   it("splits one tab and adds no tab or pane-move calls", async () => {
-    const w = world({ terminal: "herdr", supervisorPane: false, developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: false, herdrLayout: "split", developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("three panes and the developer label", () => herdrPanes(w).length === 3 && herdrDisplayAgent(w, "developer") === "developer · fake");
 
@@ -148,7 +148,7 @@ describe("AC-4: with split, the layout is unchanged", { timeout: 30_000 }, () =>
 
 describe("AC-5: changing the layout rearranges existing panes on the next start", { timeout: 60_000 }, () => {
   it("moves each pane into a labelled tab when switching split -> tabs", async () => {
-    const w = world({ terminal: "herdr", supervisorPane: false, developer: "/bin/sleep 60\n" });
+    const w = world({ terminal: "herdr", supervisorPane: false, herdrLayout: "split", developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
     await waitFor("three panes", () => herdrPanes(w).length === 3);
     const before = herdrPaneIds(w);
@@ -188,16 +188,16 @@ describe("AC-5: changing the layout rearranges existing panes on the next start"
 });
 
 describe("AC-6: documentation names the setting and the role label", () => {
-  it("the README configuration table lists workflow.herdr_layout with default split and both values", () => {
+  it("the README configuration table lists workflow.herdr_layout with default tabs and both values", () => {
     const readme = readFileSync("README.md", "utf8");
-    expect(readme).toMatch(/\| `workflow\.herdr_layout` \| `split` \|/);
+    expect(readme).toMatch(/\| `workflow\.herdr_layout` \| `tabs` \|/);
     expect(readme).toContain('`"split"`');
     expect(readme).toContain('`"tabs"`');
   });
 
   it("design.md shows the key in the example config and describes both layouts and the role label", () => {
     const design = readFileSync("docs/design.md", "utf8");
-    expect(design).toContain('herdr_layout = "split"');
+    expect(design).toContain('herdr_layout = "tabs"');
     const backends = design.slice(design.indexOf("### 9.6"));
     expect(backends).toContain("herdr_layout");
     expect(backends).toContain("`split`");

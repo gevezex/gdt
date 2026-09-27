@@ -121,8 +121,24 @@ evidence too.
 | Node 24 LTS | runs gdt |
 | `git` | the shared checkout the roles work in |
 | `gh`, logged in (`gh auth login`) | issues, pull requests, comments, checks |
-| at least one agent CLI | `claude`, `codex`, `opencode`, `mcode`, `pi` or `omp` |
-| [herdr](https://herdr.dev) 0.9.1+ (optional) | watch the roles live; otherwise use `terminal = "headless"` |
+| at least one agent CLI | `claude`, `codex`, `opencode`, `mcode`, `pi` or `omp` (see below) |
+| [herdr](https://herdr.dev) 0.9.1+ | the default way to watch the roles live, one tab per role; on machines without herdr set `workflow.terminal = "headless"` |
+
+### Agent prerequisites
+
+Before the first `gdt start`, every agent CLI you name in `.gdt/config.toml` must
+already work on your machine with the exact model id you set there. For each
+role:
+
+1. install the agent CLI,
+2. log in or configure its API key or subscription,
+3. run it once successfully with the model id from `roles.<role>.model` (for
+   example `opencode/deepseek/deepseek-v4-flash`).
+
+gdt runs the agent CLI as is, so the agent uses its own login, tokens and
+credits. gdt stores no credentials and does not log in, choose a plan, or track
+token use or costs. `gdt doctor` only checks that the CLI is on `PATH`, not that
+its login, API key or model works.
 
 ## Install
 
@@ -316,7 +332,7 @@ overrides (for example another model) and is not committed.
 | `workflow.max_correction_rounds` | `2` | Correction rounds after round 0 |
 | `workflow.terminal` | `"herdr"` | `"herdr"` or `"headless"` |
 | `workflow.supervisor_pane` | `false` | herdr: also show the supervisor in a pane |
-| `workflow.herdr_layout` | `split` | herdr: `"split"` (panes side by side in one tab) or `"tabs"` (one tab per pane) |
+| `workflow.herdr_layout` | `tabs` | herdr: `"tabs"` (one tab per pane) or `"split"` (panes side by side in one tab) |
 | `workflow.poll_seconds` | `30` | How often the supervisor reads GitHub |
 | `contract.max_acceptance_criteria` | `8` | Maximum number of ACs per issue |
 | `contract.extra_rules` | none | File with project rules added to every role prompt |
@@ -344,11 +360,12 @@ How each agent CLI is invoked is documented in [docs/agents.md](docs/agents.md).
 
 ```text
  herdr workspace "gdt-251"                        headless
- ┌──────────────┬──────────────┬──────────────┐
- │ developer ·  │ tester ·     │ reviewer ·   │   detached processes,
- │ opencode ·   │ claude ·     │ codex ·      │   one log file each in
- │ RUNNING      │ WAITING      │ WAITING      │   .git/gdt/issue-251/logs/
- └──────────────┴──────────────┴──────────────┘
+ ┌────────────┐ ┌────────────┐ ┌────────────┐
+ │ developer  │ │ tester     │ │ reviewer   │   detached processes,
+ │ opencode · │ │ claude ·   │ │ codex ·    │   one log file each in
+ │ RUNNING    │ │ WAITING    │ │ WAITING    │   .git/gdt/issue-251/logs/
+ └────────────┘ └────────────┘ └────────────┘
+   one tab per role, labelled developer, tester and reviewer
    supervisor runs detached → logs/supervisor.log
 ```
 

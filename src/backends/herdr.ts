@@ -36,7 +36,7 @@ export interface HerdrOptions {
   agents: Record<Role, string>;
   /** AC-1: when false, no supervisor pane is created; the supervisor runs detached to its log. */
   supervisorPane: boolean;
-  /** AC-3/AC-4: `split` (default) keeps every pane in one tab; `tabs` gives each pane its own tab. */
+  /** `tabs` (default) gives each pane its own tab; `split` keeps every pane in one tab. */
   layout: HerdrLayout;
 }
 
