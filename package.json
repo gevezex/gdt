@@ -1,9 +1,23 @@
 {
   "name": "@gevezex/gdt",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "description": "GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.",
+  "keywords": [
+    "github",
+    "pull-request",
+    "ai-agents",
+    "coding-agent",
+    "claude-code",
+    "codex",
+    "opencode",
+    "cli"
+  ],
   "license": "MIT",
   "author": "Ayhan Cicek",
+  "homepage": "https://github.com/gevezex/gdt#readme",
+  "bugs": {
+    "url": "https://github.com/gevezex/gdt/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gevezex/gdt.git"
@@ -26,7 +40,8 @@
     "build": "tsc -p tsconfig.build.json && node scripts/export-schemas.js",
     "lint": "eslint . && tsc --noEmit",
     "pretest": "npm run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run lint && npm test"
   },
   "dependencies": {
     "smol-toml": "^1.9.0",
@@ -39,5 +54,8 @@
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
