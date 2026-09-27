@@ -154,6 +154,8 @@ function markStopped(p: Paths, issue: number, env: Env): void {
     const backend = backendFor(report, p.root, issue, env, p);
     backend.setTitle("supervisor", "supervisor · stopped");
     for (const role of ROLES) backend.setTitle(role, `${role} · ${report.roles[role].agent} · STOPPED`);
+    // AC-5: `stopped` reports `idle` for the supervisor pane.
+    backend.reportState("supervisor", "idle");
   } catch {
     // The processes are already stopped; a missing herdr must not fail `gdt stop`.
   }

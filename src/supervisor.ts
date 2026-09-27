@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import type { AgentState } from "./backends/backend.js";
 import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, type ResolvedConfig, type Role, ROLES } from "./config.js";
 import { sectionText, validateContract } from "./contract.js";
@@ -53,6 +54,24 @@ export interface Dispatch {
   dispatched_at: string;
 }
 
+/** The states the supervisor puts in a role pane's title. */
+export type RolePaneState = "RUNNING" | "WAITING" | "DONE" | "FAILED";
+
+/** AC-4: the herdr agent state reported for each role pane state. */
+const ROLE_PANE_STATE: Record<RolePaneState, AgentState> = {
+  RUNNING: "working",
+  WAITING: "idle",
+  DONE: "idle",
+  FAILED: "blocked",
+};
+
+/** AC-5: the herdr agent state reported for the supervisor pane, by workflow status. */
+export function supervisorAgentState(status: Status): AgentState {
+  if (status === "awaiting_human" || status === "blocked" || status === "failed") return "blocked";
+  if (status === "ready_to_merge" || status === "stopped" || status === "paused") return "idle";
+  return "working";
+}
+
 export function cliPath(): string {
   return fileURLToPath(new URL("./cli.js", import.meta.url));
 }
@@ -93,6 +112,7 @@ function log(line: string): void {
 
 class Supervisor {
   private trusted: string[] = [];
+  private reportWarned = false;
   private readonly agents: Record<Role, string>;
 
   constructor(
@@ -116,11 +136,32 @@ class Supervisor {
     return `${role} · ${this.agents[role]} · ${state}`;
   }
 
+  /**
+   * AC-4/AC-5: reports a pane's agent state to the backend. AC-6: a failing report never affects the
+   * workflow, and only the first failure is logged.
+   */
+  private reportState(name: string, state: AgentState): void {
+    try {
+      this.backend.reportState(name, state);
+    } catch (err) {
+      if (this.reportWarned) return;
+      this.reportWarned = true;
+      log(`warning: herdr state report failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** AC-4: sets a role pane's title and reports the matching herdr agent state. */
+  private setRoleState(role: Role, state: RolePaneState): void {
+    this.backend.setTitle(role, this.roleTitle(role, state));
+    this.reportState(role, ROLE_PANE_STATE[state]);
+  }
+
   /** Records a status; notifies once when entering a notifying status. */
   private setStatus(status: Status, reason: string, extra: Partial<State> = {}): void {
     if (this.state.status !== status || this.state.reason !== reason) log(`status ${status}${reason === "" ? "" : `: ${reason}`}`);
     Object.assign(this.state, { status, reason }, extra);
     this.backend.setTitle("supervisor", `supervisor · ${status}`);
+    this.reportState("supervisor", supervisorAgentState(status));
     if (NOTIFY_STATUSES.includes(status)) {
       if (this.state.notified_status !== status) {
         const used = notify(`gdt #${this.issue}: ${status}`, reason === "" ? status : reason, this.env, log);
@@ -136,8 +177,9 @@ class Supervisor {
   startWorkers(): void {
     this.backend.ensureWorkspace();
     this.backend.setTitle("supervisor", "supervisor · starting");
+    this.reportState("supervisor", supervisorAgentState(this.state.status));
     for (const role of ROLES) {
-      this.backend.setTitle(role, this.roleTitle(role, "WAITING"));
+      this.setRoleState(role, "WAITING");
       if (this.backend.alive(this.state.pids.workers[role] ?? -1)) continue;
       this.state.pids.workers[role] = this.backend.spawnPane(role, [process.execPath, cliPath(), "_worker", String(this.issue), role]);
     }
@@ -182,7 +224,7 @@ class Supervisor {
     const running = this.state.inflight;
     if (running !== null) {
       if (running.violation !== undefined) {
-        this.backend.setTitle(running.role, this.roleTitle(running.role, "FAILED"));
+        this.setRoleState(running.role, "FAILED");
         this.setStatus("blocked", running.violation, { role: running.role, round: running.round });
         return "continue";
       }
@@ -199,7 +241,7 @@ class Supervisor {
       if (result.violation !== undefined) {
         // A broken role boundary outranks the exit code: the checkout can no longer be trusted.
         running.violation = result.violation;
-        this.backend.setTitle(running.role, this.roleTitle(running.role, "FAILED"));
+        this.setRoleState(running.role, "FAILED");
         this.setStatus("blocked", result.violation, { role: running.role, round: running.round, exit_code: result.exit_code });
         return "continue";
       }
@@ -208,12 +250,12 @@ class Supervisor {
           result.exit_code === null
             ? `${running.role} turn was interrupted`
             : `${running.role} turn failed (exit code ${result.exit_code})`;
-        this.backend.setTitle(running.role, this.roleTitle(running.role, "FAILED"));
+        this.setRoleState(running.role, "FAILED");
         this.setStatus("failed", reason, { role: running.role, round: running.round, exit_code: result.exit_code });
         return "exit";
       }
       // AC-5: the turn finished successfully.
-      this.backend.setTitle(running.role, this.roleTitle(running.role, "DONE"));
+      this.setRoleState(running.role, "DONE");
     }
 
     if (pullRequests.length > 1) {
@@ -316,7 +358,7 @@ class Supervisor {
       checks: 0,
       missing: false,
     };
-    this.backend.setTitle(decision.role, this.roleTitle(decision.role, "RUNNING"));
+    this.setRoleState(decision.role, "RUNNING");
     this.setStatus("running", `dispatched ${decision.role}: ${decision.reason}`, { role: decision.role, round: decision.round, exit_code: null });
     log(`dispatched ${key}`);
     return "continue";

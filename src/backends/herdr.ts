@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { type Role, ROLES } from "../config.js";
 import { which } from "../doctor.js";
 import { alive, writeJsonAtomic } from "../state.js";
-import type { Backend } from "./backend.js";
+import type { AgentState, Backend } from "./backend.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -61,6 +61,16 @@ function call(args: readonly string[], opts: HerdrOptions): string {
 /** Runs `pane run`, which prints nothing on success. */
 function callVoid(args: readonly string[], opts: HerdrOptions): void {
   call(args, opts);
+}
+
+/** Runs `pane report-agent`, which prints nothing on success. Throws on a non-zero exit. */
+function reportAgent(opts: HerdrOptions, paneId: string, label: string, state: AgentState): void {
+  const args = ["pane", "report-agent", "--source", "gdt", "--agent", label, "--state", state, paneId];
+  const result = spawnSync(bin(opts.env), args, { cwd: opts.root, env: opts.env, encoding: "utf8" });
+  if (result.status !== 0) {
+    const reason = (result.stderr ?? "").trim() || (result.stdout ?? "").trim() || `herdr exited with ${result.status ?? result.signal}`;
+    throw new Error(`herdr pane report-agent: ${reason}`);
+  }
 }
 
 /** Parses the `{ "result": ... }` envelope; a herdr `error` becomes a thrown Error. */
@@ -227,6 +237,15 @@ export function herdr(opts: HerdrOptions): Backend {
     },
 
     setTitle: (name, title) => rename(name as PaneName, title),
+
+    reportState(name, state) {
+      const paneId = findPane(name as PaneName);
+      if (paneId === null) throw new Error(`herdr: no pane named ${name}`);
+      // AC-4/AC-5: the role's agent is the label, the supervisor reports as `gdt`.
+      const label = name === "supervisor" ? "gdt" : opts.agents[name as Role];
+      reportAgent(opts, paneId, label, state);
+    },
+
     alive: (handle) => alive(handle),
     attach: () => {
       const state = readPanes(opts.panesFile);
