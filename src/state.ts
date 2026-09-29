@@ -42,6 +42,8 @@ export interface Inflight {
   missing: boolean;
   /** AC-1: the blocked reason of that handoff, so a restart reports it again. */
   missing_reason?: string;
+  /** AC-1: set once the turn passed its deadline; the block stays until a retry, a late result is ignored. */
+  timed_out?: boolean;
   /** Set when the turn broke a role boundary; the key stays blocked until a retry. */
   violation?: string;
 }

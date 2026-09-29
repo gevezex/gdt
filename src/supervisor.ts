@@ -81,6 +81,21 @@ export function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/** AC-1: the blocked reason of a turn that ran past its deadline. */
+export function timeoutReason(role: Role, minutes: number): string {
+  return `${role} turn exceeded ${minutes} minutes`;
+}
+
+/** AC-5: the deadline of a turn dispatched at `dispatchedAt`, with `minutes` as the configured limit. */
+export function turnDeadline(dispatchedAt: string, minutes: number): Date {
+  return new Date(new Date(dispatchedAt).getTime() + minutes * 60_000);
+}
+
+/** AC-3: true when a blocked reason is a turn timeout, so `gdt retry` can lift it. */
+export function isTimeoutReason(reason: string): boolean {
+  return reason.includes(" turn exceeded ") && reason.endsWith(" minutes");
+}
+
 /** One key per role, round, head and contract; a resumed question makes the resumed turn distinct. */
 export function dispatchKey(decision: Extract<Decision, { action: "dispatch" }>, head: string | null, bodySha: string): string {
   const parts = [decision.role, `r${decision.round}`, head ?? "no-pr", bodySha];
@@ -166,6 +181,18 @@ class Supervisor {
   private setRoleState(role: Role, state: RolePaneState): void {
     this.backend.setTitle(role, this.roleTitle(role, state));
     this.reportState(role, ROLE_PANE_STATE[state]);
+  }
+
+  /**
+   * AC-1: ends a role's worker, which stops its agent process group on SIGTERM. Its pid is dropped so
+   * a later `gdt retry` does not try to stop an already-dead process.
+   */
+  private stopRole(role: Role): void {
+    const pid = this.state.pids.workers[role];
+    if (pid !== undefined && this.backend.alive(pid)) this.backend.close(pid);
+    this.state.pids.workers = Object.fromEntries(
+      Object.entries(this.state.pids.workers).filter(([name]) => name !== role),
+    ) as Partial<Record<Role, number>>;
   }
 
   /** AC-1: sets the display-only agent label, for example `developer · opencode` or `gdt · supervisor`. */
@@ -260,8 +287,23 @@ class Supervisor {
         this.setStatus("blocked", reason, { role: running.role, round: running.round });
         return "continue";
       }
+      // AC-1: a turn past its deadline blocks and stops its worker and agent. Once timed out the block
+      // stays, even if a result file appears later; only `gdt retry` lifts it (Assumptions).
+      const limit = this.config.workflow.turn_timeout_minutes;
+      if (running.timed_out === true) {
+        this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
+        return "continue";
+      }
       const result = readJson<TurnResult>(this.p.result(running.key));
       if (result === null) {
+        if (now.getTime() >= turnDeadline(running.dispatched_at, limit).getTime()) {
+          running.timed_out = true;
+          this.stopRole(running.role);
+          this.setRoleState(running.role, "FAILED");
+          this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
+          log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
+          return "continue";
+        }
         this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });
         return "continue";
       }

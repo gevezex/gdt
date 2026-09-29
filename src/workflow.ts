@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { relative } from "node:path";
 import { headless } from "./backends/headless.js";
 import { type Backend, backendFor } from "./backends/index.js";
-import { loadConfig, ROLES, userConfigPath } from "./config.js";
+import { DEFAULT_TURN_TIMEOUT_MINUTES, loadConfig, ROLES, userConfigPath } from "./config.js";
 import { validateContract } from "./contract.js";
 import { findRepository, herdrPreflight, unsupportedAgentFindings } from "./doctor.js";
 import { changedFiles } from "./git.js";
@@ -11,7 +11,7 @@ import { issueBody, repository } from "./github.js";
 import { loadLocale } from "./locale.js";
 import { isInvalidRecordReason } from "./protocol.js";
 import { alive, lockHolder, type Paths, paths, readOverrides, readState, type State, type Status, writeState } from "./state.js";
-import { cliPath } from "./supervisor.js";
+import { cliPath, isTimeoutReason, turnDeadline } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -209,7 +209,10 @@ function retryable(state: State): boolean {
   if (state.status === "failed") return true;
   return (
     state.status === "blocked" &&
-    (state.reason.includes("without a visible handoff") || state.reason.includes("already ran") || isInvalidRecordReason(state.reason))
+    (state.reason.includes("without a visible handoff") ||
+      state.reason.includes("already ran") ||
+      isTimeoutReason(state.reason) ||
+      isInvalidRecordReason(state.reason))
   );
 }
 
@@ -246,7 +249,14 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
 
 function blockedHint(issue: number, reason: string): string {
   if (reason.startsWith("round budget exhausted")) return `gdt allow-round ${issue}`;
-  if (reason.includes("without a visible handoff") || reason.includes("already ran") || isInvalidRecordReason(reason)) return `gdt retry ${issue}`;
+  if (
+    reason.includes("without a visible handoff") ||
+    reason.includes("already ran") ||
+    isTimeoutReason(reason) ||
+    isInvalidRecordReason(reason)
+  ) {
+    return `gdt retry ${issue}`;
+  }
   if (reason.includes("without a Changelog update")) return `add a Changelog entry to issue #${issue}, or revert the body change`;
   return "resolve the cause; the supervisor checks again on every poll";
 }
@@ -289,17 +299,23 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
   const p = paths(root, issue, env);
   const state = readState(p);
   if (state === null) {
-    return json
-      ? { code: 1, stdout: `${JSON.stringify({ issue, status: null, next_step: `gdt start ${issue}` }, null, 2)}\n`, stderr: "" }
-      : fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
+    // AC-5: the same keys, null without a dispatched turn.
+    const empty = { issue, status: null, turn_started_at: null, turn_deadline: null, next_step: `gdt start ${issue}` };
+    return json ? { code: 1, stdout: `${JSON.stringify(empty, null, 2)}\n`, stderr: "" } : fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
   }
   const effective = effectiveState(p, state);
   const { line, next } = describe(effective, lockHolder(p) !== null);
   if (!json) return ok(`${line}. Next: ${next}\n`);
 
   let maxRounds: number | null = null;
+  let turnTimeoutMinutes = DEFAULT_TURN_TIMEOUT_MINUTES;
   const { report } = loadConfig(root, env);
-  if (report.valid) maxRounds = report.workflow.max_correction_rounds;
+  if (report.valid) {
+    maxRounds = report.workflow.max_correction_rounds;
+    turnTimeoutMinutes = report.workflow.turn_timeout_minutes;
+  }
+  // AC-5: the in-flight turn's start and deadline, null without one.
+  const inflight = state.inflight;
   const out = {
     issue,
     workflow_id: state.workflow_id,
@@ -311,6 +327,8 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
     exit_code: state.exit_code,
     pr_number: state.pr_number,
     open_findings: state.open_findings ?? [],
+    turn_started_at: inflight?.dispatched_at ?? null,
+    turn_deadline: inflight === null ? null : turnDeadline(inflight.dispatched_at, turnTimeoutMinutes).toISOString(),
     overrides: readOverrides(p),
     next_step: next,
   };
