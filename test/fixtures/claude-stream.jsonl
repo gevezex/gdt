@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","cwd":"/work/repo","session_id":"4f1c","tools":["Bash","Read"],"model":"claude-sonnet-5"}
+{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"I will run the tests."},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"npm test","description":"Run the tests"}}]},"session_id":"4f1c"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"Tests: 12 passed","is_error":false}]},"session_id":"4f1c"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":5120,"num_turns":2,"result":"All tests pass.","session_id":"4f1c","total_cost_usd":0.01}

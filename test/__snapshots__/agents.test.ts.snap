@@ -10,8 +10,12 @@ exports[`AC-2: Claude Code adapter matches its verified invocation > builds the 
     "--permission-mode",
     "bypassPermissions",
     "--no-session-persistence",
+    "--output-format",
+    "stream-json",
+    "--verbose",
   ],
   "env": {},
+  "output": "claude-stream-json",
   "stdin": "/tmp/p.md",
 }
 `;

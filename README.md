@@ -459,6 +459,21 @@ Everything gdt keeps for an issue lives under `.git/gdt/issue-<n>/`: `state.json
 (the workflow state), `logs/` (one log per process) and `runs/` (the prompt and
 result of every turn). It is never committed.
 
+### What a role pane shows
+
+During a turn a role pane (herdr) or role log (headless, `logs/<role>.log`)
+shows what the agent CLI prints with the invocation in
+[docs/agents.md](docs/agents.md):
+
+| Agent | What the pane shows during a turn |
+|---|---|
+| `claude` | Live progress rendered by gdt from Claude Code's event stream: assistant text, tool calls (`→ Bash npm test`), tool results (`✓ ok` or `✗ error`) and the final result, while the turn runs |
+| `codex` | What `codex exec` prints: its progress (messages and the commands it runs) while the turn runs, then the final message |
+| `opencode` | What `opencode run` prints: messages and tool calls while the turn runs |
+| `mcode` | What `mcode exec` prints in its default text output |
+| `pi` | What `pi --print` prints: the final answer, when the turn ends |
+| `omp` | What `omp --print` prints: the final answer, when the turn ends |
+
 ### Notifications
 
 When a workflow needs you, gdt notifies you through the first of

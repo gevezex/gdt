@@ -7,6 +7,8 @@ export interface Invocation {
   env: Record<string, string>;
   /** File fed to the agent's stdin, or null for no stdin. */
   stdin: string | null;
+  /** How the worker shows the agent's stdout: as is (the default) or rendered from Claude Code's stream-json. */
+  output?: "claude-stream-json";
 }
 
 /**

@@ -36,10 +36,10 @@ version line when you re-verify against a newer CLI.
 
 ## Claude Code
 
-Verified against: claude 2.1.283
+Verified against: claude 2.1.284
 
 ```sh
-claude -p --model <model> --permission-mode bypassPermissions --no-session-persistence < <prompt-file>
+claude -p --model <model> --permission-mode bypassPermissions --no-session-persistence --output-format stream-json --verbose < <prompt-file>
 ```
 
 - Unattended: `-p` (print mode) runs one turn and exits.
@@ -47,6 +47,12 @@ claude -p --model <model> --permission-mode bypassPermissions --no-session-persi
 - Prompt: on stdin. With no prompt argument, `-p` reads the prompt from stdin.
 - Permissions: `--permission-mode bypassPermissions` skips every permission prompt.
   `--no-session-persistence` keeps turns from piling up saved sessions (no session reuse).
+- Output: `--output-format stream-json --verbose` makes `-p` write one JSON event per line while
+  the turn runs (with the default `text` format it prints only the final result). The worker reads
+  that stream line by line and writes readable lines to the pane or role log: the assistant's text,
+  `→ <tool> <command, file or pattern>` per tool call, `  ✓ ok` or `  ✗ error` per tool result, and
+  `result: <subtype>` with the final result. A line it cannot read is shown as is (an unknown event
+  or content item as `[<type>]`) and never fails the turn. The exit code is passed through as before.
 - Vendor: `anthropic`.
 - Skill directory: `~/.claude/skills/gdt`
 
