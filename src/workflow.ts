@@ -10,8 +10,19 @@ import { changedFiles } from "./git.js";
 import { issueBody, repository } from "./github.js";
 import { loadLocale } from "./locale.js";
 import { isInvalidRecordReason } from "./protocol.js";
-import { alive, lockHolder, type Paths, paths, readOverrides, readState, type State, type Status, writeState } from "./state.js";
-import { cliPath, isTimeoutReason, turnDeadline } from "./supervisor.js";
+import {
+  alive,
+  lockHolder,
+  type Paths,
+  paths,
+  readJson,
+  readOverrides,
+  readState,
+  type State,
+  type Status,
+  writeState,
+} from "./state.js";
+import { cliPath, isTimeoutReason, turnDeadline, type TurnResult } from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -314,8 +325,10 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
     maxRounds = report.workflow.max_correction_rounds;
     turnTimeoutMinutes = report.workflow.turn_timeout_minutes;
   }
-  // AC-5: the in-flight turn's start and deadline, null without one.
+  // AC-5 (finding R-2): the in-flight turn's start and deadline. A result file ends the turn (issue
+  // Definitions), so a turn that has finished but still awaits its handoff check reports null.
   const inflight = state.inflight;
+  const turnStart = inflight !== null && readJson<TurnResult>(p.result(inflight.key)) === null ? inflight.dispatched_at : null;
   const out = {
     issue,
     workflow_id: state.workflow_id,
@@ -327,8 +340,8 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
     exit_code: state.exit_code,
     pr_number: state.pr_number,
     open_findings: state.open_findings ?? [],
-    turn_started_at: inflight?.dispatched_at ?? null,
-    turn_deadline: inflight === null ? null : turnDeadline(inflight.dispatched_at, turnTimeoutMinutes).toISOString(),
+    turn_started_at: turnStart,
+    turn_deadline: turnStart === null ? null : turnDeadline(turnStart, turnTimeoutMinutes).toISOString(),
     overrides: readOverrides(p),
     next_step: next,
   };

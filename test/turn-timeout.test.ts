@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { alive, paths, type State, writeState } from "../src/state.js";
+import { alive, paths, type State, writeJsonAtomic, writeState } from "../src/state.js";
 import { EXAMPLE_CONFIG, fakePath, gdt, tempRepo } from "./helpers.js";
 import { FAKE_GH, gdt as gdtWorld, lines, stateOf, stopWorlds, supervisorLog, waitFor, world, type World } from "./world.js";
 
@@ -78,6 +78,33 @@ describe("AC-1: a turn that exceeds the time limit ends in blocked and its agent
     const notifications = lines(join(w.bin, "notifications"));
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toContain(reason);
+  });
+});
+
+describe("AC-1: a GitHub failure does not postpone the timeout", { timeout: 30_000 }, () => {
+  it("still blocks the turn and stops the agent while gh is unavailable", async () => {
+    const w = world({
+      pr: true,
+      turnTimeoutMinutes: 0.02,
+      developer: "gh fake-record 40 handoff\nexit 0\n",
+      tester: sleepingTester(),
+    });
+    expect(gdtWorld(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("the tester turn", () => stateOf(w).status === "running" && stateOf(w).role === "tester");
+    const agentPid = await waitForRunningTester(w);
+
+    // GitHub becomes unavailable for the rest of the workflow. Finding R-1: the deadline check must
+    // not depend on a successful `gh` call, or the hung turn stays `running` forever.
+    writeFileSync(join(w.bin, "gh"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(w.bin, "gh"), 0o755);
+
+    const reason = "tester turn exceeded 0.02 minutes";
+    await waitFor("the timeout block despite the gh failure", () => stateOf(w).reason === reason);
+    expect(stateOf(w).status).toBe("blocked");
+    await waitFor("the tester agent to stop", () => !alive(agentPid));
+    expect(gdtWorld(w, "status", "12").stdout).toBe(`blocked: ${reason}. Next: gdt retry 12\n`);
+    // The gh failure was real: polls were skipped, yet the timeout still fired.
+    expect(supervisorLog(w)).toContain("poll failed:");
   });
 });
 
@@ -258,5 +285,46 @@ describe("AC-5: gdt status --json shows the running turn's start and deadline", 
     const result = gdt(["status", "10", "--json"], root, fakePath());
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ turn_started_at: null, turn_deadline: null });
+  });
+
+  it("reports null for both once the worker wrote the turn's result file", () => {
+    const key = "tester.r0.no-pr.abc";
+    const root = stateWith({
+      status: "blocked",
+      role: "tester",
+      round: 0,
+      reason: "tester finished without a visible handoff",
+      inflight: {
+        key,
+        role: "tester",
+        round: 0,
+        dispatched_at: "2026-09-29T10:00:00.000Z",
+        after_comment_id: 0,
+        checks: 5,
+        missing: true,
+      },
+    });
+    // A written result file ends the turn (issue Definitions), even while `inflight` is kept.
+    writeJsonAtomic(paths(root, 10, GIT_ENV).result(key), { key, exit_code: 0, finished_at: "2026-09-29T10:00:05.000Z" });
+    const result = gdt(["status", "10", "--json"], root, fakePath());
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ turn_started_at: null, turn_deadline: null });
+  });
+});
+
+describe("AC-5: a finished turn reports no start or deadline while awaiting its handoff", { timeout: 30_000 }, () => {
+  it("reports null once the worker wrote its result file and the handoff check waits", async () => {
+    const w = world({ pr: true, developer: "exit 0\n", handoffChecks: 2 });
+    expect(gdtWorld(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("the missing handoff block", () => stateOf(w).status === "blocked");
+    expect(stateOf(w).reason).toBe("developer finished without a visible handoff");
+    // Finding R-2: the supervisor keeps `inflight` during the handoff check, but the turn has ended.
+    expect(stateOf(w).inflight).not.toBeNull();
+    const out = JSON.parse(gdtWorld(w, "status", "12", "--json").stdout) as {
+      turn_started_at: string | null;
+      turn_deadline: string | null;
+    };
+    expect(out.turn_started_at).toBeNull();
+    expect(out.turn_deadline).toBeNull();
   });
 });

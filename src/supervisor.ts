@@ -225,29 +225,39 @@ class Supervisor {
   }
 
   /**
-   * AC-1: settles an in-flight turn that is already past its deadline before replacement workers
-   * start. A replacement worker that finds the turn's `started` marker writes an interruption result
-   * (exit code null), which would otherwise make the restarted supervisor report `failed` instead of
-   * the required retryable `blocked` (issue Assumptions). A result file ends the turn (issue
-   * Definitions), so a finished turn is left to `tick` (AC-2). Returns the settled role, so
-   * `startWorkers` keeps its FAILED pane and starts no worker for it.
+   * AC-1 (finding R-1): settles an in-flight turn that is past its deadline: stops the role's worker
+   * (whose SIGTERM handler ends its detached agent process group), marks the role FAILED and blocks
+   * with the timeout reason. It is called before any GitHub fetch, so a failing `gh` call can never
+   * postpone the timeout. A result file ends the turn (issue Definitions), so only a result-less turn
+   * can time out; once timed out the block stays, even if a result file appears later, until
+   * `gdt retry` (issue Assumptions). Returns "continue" after handling the turn, or null otherwise.
    */
-  private settleOverdueTurn(now: Date): Role | null {
+  private settleTimedOutTurn(now: Date): "continue" | null {
     const running = this.state.inflight;
     if (running === null || running.violation !== undefined || running.missing) return null;
-    if (running.timed_out === true) {
-      this.setRoleState(running.role, "FAILED");
-      return running.role;
-    }
     const limit = this.config.workflow.turn_timeout_minutes;
-    if (readJson<TurnResult>(this.p.result(running.key)) !== null) return null;
-    if (now.getTime() < turnDeadline(running.dispatched_at, limit).getTime()) return null;
-    running.timed_out = true;
-    this.stopRole(running.role);
+    if (running.timed_out !== true) {
+      // A finished turn is left to `tick` (AC-2); only a result-less turn past its deadline times out.
+      if (readJson<TurnResult>(this.p.result(running.key)) !== null) return null;
+      if (now.getTime() < turnDeadline(running.dispatched_at, limit).getTime()) return null;
+      running.timed_out = true;
+      this.stopRole(running.role);
+      log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
+    }
     this.setRoleState(running.role, "FAILED");
     this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
-    log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
-    return running.role;
+    return "continue";
+  }
+
+  /**
+   * AC-1: settles an overdue turn before replacement workers start. A replacement worker that finds
+   * the turn's `started` marker writes an interruption result (exit code null), which would
+   * otherwise make the restarted supervisor report `failed` instead of the required retryable
+   * `blocked` (issue Assumptions). Returns the settled role, so `startWorkers` keeps its FAILED pane
+   * and starts no worker for it.
+   */
+  private settleOverdueTurn(now: Date): Role | null {
+    return this.settleTimedOutTurn(now) === null ? null : (this.state.inflight?.role ?? null);
   }
 
   startWorkers(): void {
@@ -281,6 +291,9 @@ class Supervisor {
       this.setStatus("paused", "", { role: null });
       return "continue";
     }
+    // AC-1 (finding R-1): the deadline check runs before any GitHub fetch, so a failing `gh` call
+    // cannot postpone the timeout and leave a hung turn `running` forever.
+    if (this.settleTimedOutTurn(now) !== null) return "continue";
     const { body, pullRequests } = issueSnapshot(this.issue, this.p.root, this.env);
     const bodySha = sha256(body);
     const changelog = sectionText(body, this.locale.sections.changelog) ?? "";
@@ -317,24 +330,10 @@ class Supervisor {
         this.setStatus("blocked", reason, { role: running.role, round: running.round });
         return "continue";
       }
-      // AC-1: a turn past its deadline blocks and stops its worker and agent. Once timed out the block
-      // stays, even if a result file appears later; only `gdt retry` lifts it (Assumptions).
-      const limit = this.config.workflow.turn_timeout_minutes;
-      if (running.timed_out === true) {
-        this.setRoleState(running.role, "FAILED");
-        this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
-        return "continue";
-      }
+      // AC-1: a turn past its deadline was already settled at the top of this tick, before the GitHub
+      // fetch. A result-less turn that reaches this point is still in flight.
       const result = readJson<TurnResult>(this.p.result(running.key));
       if (result === null) {
-        if (now.getTime() >= turnDeadline(running.dispatched_at, limit).getTime()) {
-          running.timed_out = true;
-          this.stopRole(running.role);
-          this.setRoleState(running.role, "FAILED");
-          this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
-          log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
-          return "continue";
-        }
         this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });
         return "continue";
       }
