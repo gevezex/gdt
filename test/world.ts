@@ -92,6 +92,8 @@ export interface Options {
   roleAgents?: Partial<Record<"developer" | "tester" | "reviewer", string>>;
   /** Makes the fake herdr's `pane report-agent` exit non-zero (AC-6). */
   reportFail?: boolean;
+  /** `workflow.turn_timeout_minutes`; omitted when undefined, so the gdt default (60) applies. */
+  turnTimeoutMinutes?: number;
   extraFiles?: Record<string, string>;
 }
 
@@ -100,6 +102,7 @@ export function config(
   terminal: "headless" | "herdr" = "headless",
   supervisorPane?: boolean,
   herdrLayout?: "split" | "tabs",
+  turnTimeoutMinutes?: number,
 ): string {
   return [
     'language = "en"',
@@ -110,6 +113,7 @@ export function config(
     ...(herdrLayout === undefined ? [] : [`herdr_layout = "${herdrLayout}"`]),
     "poll_seconds = 0.1",
     `handoff_checks = ${handoffChecks}`,
+    ...(turnTimeoutMinutes === undefined ? [] : [`turn_timeout_minutes = ${turnTimeoutMinutes}`]),
     "",
   ].join("\n");
 }
@@ -128,7 +132,13 @@ export function userConfig(roleAgents?: Partial<Record<"developer" | "tester" | 
 export function world(options: Options = {}): World {
   const root = tempRepo({
     ".config/gdt/config.toml": userConfig(options.roleAgents),
-    ".gdt/config.toml": config(options.handoffChecks ?? 5, options.terminal ?? "headless", options.supervisorPane, options.herdrLayout),
+    ".gdt/config.toml": config(
+      options.handoffChecks ?? 5,
+      options.terminal ?? "headless",
+      options.supervisorPane,
+      options.herdrLayout,
+      options.turnTimeoutMinutes,
+    ),
     "scripts/developer.sh": options.developer ?? "exit 0\n",
     "scripts/tester.sh": options.tester ?? "/bin/sleep 60\n",
     "scripts/reviewer.sh": "/bin/sleep 60\n",

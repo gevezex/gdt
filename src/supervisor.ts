@@ -81,6 +81,21 @@ export function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/** AC-1: the blocked reason of a turn that ran past its deadline. */
+export function timeoutReason(role: Role, minutes: number): string {
+  return `${role} turn exceeded ${minutes} minutes`;
+}
+
+/** AC-5: the deadline of a turn dispatched at `dispatchedAt`, with `minutes` as the configured limit. */
+export function turnDeadline(dispatchedAt: string, minutes: number): Date {
+  return new Date(new Date(dispatchedAt).getTime() + minutes * 60_000);
+}
+
+/** AC-3: true when a blocked reason is a turn timeout, so `gdt retry` can lift it. */
+export function isTimeoutReason(reason: string): boolean {
+  return reason.includes(" turn exceeded ") && reason.endsWith(" minutes");
+}
+
 /** One key per role, round, head and contract; a resumed question makes the resumed turn distinct. */
 export function dispatchKey(decision: Extract<Decision, { action: "dispatch" }>, head: string | null, bodySha: string): string {
   const parts = [decision.role, `r${decision.round}`, head ?? "no-pr", bodySha];
@@ -168,6 +183,18 @@ class Supervisor {
     this.reportState(role, ROLE_PANE_STATE[state]);
   }
 
+  /**
+   * AC-1: ends a role's worker, which stops its agent process group on SIGTERM. Its pid is dropped so
+   * a later `gdt retry` does not try to stop an already-dead process.
+   */
+  private stopRole(role: Role): void {
+    const pid = this.state.pids.workers[role];
+    if (pid !== undefined && this.backend.alive(pid)) this.backend.close(pid);
+    this.state.pids.workers = Object.fromEntries(
+      Object.entries(this.state.pids.workers).filter(([name]) => name !== role),
+    ) as Partial<Record<Role, number>>;
+  }
+
   /** AC-1: sets the display-only agent label, for example `developer · opencode` or `gdt · supervisor`. */
   private setDisplay(name: string, label: string): void {
     try {
@@ -197,13 +224,53 @@ class Supervisor {
     this.save();
   }
 
+  /**
+   * AC-1 (finding R-1): settles an in-flight turn that is past its deadline: stops the role's worker
+   * (whose SIGTERM handler ends its detached agent process group), marks the role FAILED and blocks
+   * with the timeout reason. It is called before any GitHub fetch, so a failing `gh` call can never
+   * postpone the timeout. A result file ends the turn (issue Definitions), so only a result-less turn
+   * can time out; once timed out the block stays, even if a result file appears later, until
+   * `gdt retry` (issue Assumptions). Returns "continue" after handling the turn, or null otherwise.
+   */
+  private settleTimedOutTurn(now: Date): "continue" | null {
+    const running = this.state.inflight;
+    if (running === null || running.violation !== undefined || running.missing) return null;
+    const limit = this.config.workflow.turn_timeout_minutes;
+    if (running.timed_out !== true) {
+      // A finished turn is left to `tick` (AC-2); only a result-less turn past its deadline times out.
+      if (readJson<TurnResult>(this.p.result(running.key)) !== null) return null;
+      if (now.getTime() < turnDeadline(running.dispatched_at, limit).getTime()) return null;
+      running.timed_out = true;
+      this.stopRole(running.role);
+      log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
+    }
+    this.setRoleState(running.role, "FAILED");
+    this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
+    return "continue";
+  }
+
+  /**
+   * AC-1: settles an overdue turn before replacement workers start. A replacement worker that finds
+   * the turn's `started` marker writes an interruption result (exit code null), which would
+   * otherwise make the restarted supervisor report `failed` instead of the required retryable
+   * `blocked` (issue Assumptions). Returns the settled role, so `startWorkers` keeps its FAILED pane
+   * and starts no worker for it.
+   */
+  private settleOverdueTurn(now: Date): Role | null {
+    return this.settleTimedOutTurn(now) === null ? null : (this.state.inflight?.role ?? null);
+  }
+
   startWorkers(): void {
     this.backend.ensureWorkspace();
     // AC-1: the agents overview shows the role next to the agent name, once per `gdt start`.
     this.setDisplay("supervisor", "gdt · supervisor");
     this.backend.setTitle("supervisor", "supervisor · starting");
     this.reportState("supervisor", supervisorAgentState(this.state.status));
+    // AC-1: settle an overdue in-flight turn before its replacement worker can write a result.
+    const settled = this.settleOverdueTurn(new Date());
     for (const role of ROLES) {
+      // A settled role keeps its FAILED pane and gets no worker until `gdt retry` and `gdt start`.
+      if (role === settled) continue;
       this.setRoleState(role, "WAITING");
       this.setDisplay(role, `${role} · ${this.agents[role]}`);
       if (this.backend.alive(this.state.pids.workers[role] ?? -1)) continue;
@@ -224,6 +291,9 @@ class Supervisor {
       this.setStatus("paused", "", { role: null });
       return "continue";
     }
+    // AC-1 (finding R-1): the deadline check runs before any GitHub fetch, so a failing `gh` call
+    // cannot postpone the timeout and leave a hung turn `running` forever.
+    if (this.settleTimedOutTurn(now) !== null) return "continue";
     const { body, pullRequests } = issueSnapshot(this.issue, this.p.root, this.env);
     const bodySha = sha256(body);
     const changelog = sectionText(body, this.locale.sections.changelog) ?? "";
@@ -260,6 +330,8 @@ class Supervisor {
         this.setStatus("blocked", reason, { role: running.role, round: running.round });
         return "continue";
       }
+      // AC-1: a turn past its deadline was already settled at the top of this tick, before the GitHub
+      // fetch. A result-less turn that reaches this point is still in flight.
       const result = readJson<TurnResult>(this.p.result(running.key));
       if (result === null) {
         this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });

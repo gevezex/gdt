@@ -18,6 +18,8 @@ export const USER_CONFIG_DIR = "gdt";
 
 export const DEFAULT_LANGUAGE = "en";
 export const DEFAULT_MAX_ACCEPTANCE_CRITERIA = 8;
+/** AC-4: the turn time limit in minutes when `workflow.turn_timeout_minutes` is absent. */
+export const DEFAULT_TURN_TIMEOUT_MINUTES = 60;
 
 export type Agent = (typeof AGENTS)[number];
 export type Role = (typeof ROLES)[number];
@@ -84,6 +86,8 @@ function configSchemaFor(testAgents: boolean) {
       herdr_layout: z.enum(HERDR_LAYOUTS).default("tabs"),
       poll_seconds: z.number().positive().default(30),
       handoff_checks: z.int().min(1).default(5),
+      // AC-4: a positive number of minutes per turn, 60 by default; zero or negative is invalid.
+      turn_timeout_minutes: z.number().positive().default(DEFAULT_TURN_TIMEOUT_MINUTES),
     }),
     contract: z
       .strictObject({
