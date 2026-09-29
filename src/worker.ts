@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { renderClaudeLine } from "./agents/claude-stream.js";
 import { adapterFor, type Invocation } from "./agents/index.js";
 import { loadConfig, type ResolvedRole, type Role, TEST_AGENT, testAgentsEnabled } from "./config.js";
 import { changedFiles, type Checkout, checkout } from "./git.js";
@@ -99,17 +101,33 @@ export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<n
       done(66);
       return;
     }
-    // Its own process group, so a stop can end the agent and the children it started.
+    const rendered = inv.output === "claude-stream-json";
+    // Its own process group, so a stop can end the agent and the children it started. A rendered
+    // stream is read in this process, so the renderer adds no process that could outlive the agent.
     const child = spawn(command ?? "", args, {
       cwd,
       env: { ...env, ...inv.env },
-      stdio: [stdin, "inherit", "inherit"],
+      stdio: [stdin, rendered ? "pipe" : "inherit", "inherit"],
       detached: true,
     });
     activeAgent = child;
     const close = () => {
       if (typeof stdin === "number") closeSync(stdin);
     };
+    // With a rendered stream the turn ends once the agent has exited and its last line is written.
+    let pending = rendered && child.stdout !== null ? 2 : 1;
+    let exitCode: number | null = null;
+    const settle = () => {
+      if (--pending === 0) done(exitCode);
+    };
+    if (rendered && child.stdout !== null) {
+      const tty = process.stdout.isTTY === true;
+      const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+      lines.on("line", (line) => {
+        for (const out of renderClaudeLine(line, tty)) process.stdout.write(`${out}\n`);
+      });
+      lines.on("close", settle);
+    }
     child.on("error", (err) => {
       activeAgent = null;
       log(`agent could not start: ${err.message}`);
@@ -119,7 +137,8 @@ export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<n
     child.on("close", (code) => {
       activeAgent = null;
       close();
-      done(code);
+      exitCode = code;
+      settle();
     });
   });
 }
