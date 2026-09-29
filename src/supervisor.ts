@@ -252,6 +252,23 @@ class Supervisor {
     }
   }
 
+  /** The agent of a role's next turn: its `gdt set-agent` override, otherwise the config agent. */
+  private effectiveAgent(role: Role): string {
+    return readOverrides(this.p)[role]?.agent ?? this.agents[role];
+  }
+
+  /**
+   * #68 AC-1/AC-2: sets a role label naming the effective agent. A `gdt set-agent` that writes its
+   * override and label between our read and our write would be overwritten, so the label is written
+   * again until the override read after writing it matches.
+   */
+  private setRoleDisplay(role: Role): void {
+    for (let agent = this.effectiveAgent(role), written = ""; agent !== written; agent = this.effectiveAgent(role)) {
+      this.setDisplay(role, `${role} · ${agent}`);
+      written = agent;
+    }
+  }
+
   /** Records a status; notifies once when entering a notifying status. */
   private setStatus(status: Status, reason: string, extra: Partial<State> = {}): void {
     if (this.state.status !== status || this.state.reason !== reason) log(`status ${status}${reason === "" ? "" : `: ${reason}`}`);
@@ -296,7 +313,7 @@ class Supervisor {
 
   /** The activity sample of an in-flight turn (issue Definitions). */
   private sampleTurn(running: Inflight, pgid: number | null): ActivitySample {
-    const agent = readOverrides(this.p)[running.role]?.agent ?? this.agents[running.role];
+    const agent = this.effectiveAgent(running.role);
     const home = this.env.HOME === undefined || this.env.HOME === "" ? homedir() : this.env.HOME;
     return sample({
       root: this.p.root,
@@ -431,7 +448,7 @@ class Supervisor {
       // A settled role keeps its FAILED pane and gets no worker until `gdt retry` and `gdt start`.
       if (role === settled) continue;
       this.setRoleState(role, "WAITING");
-      this.setDisplay(role, `${role} · ${this.agents[role]}`);
+      this.setRoleDisplay(role);
       if (this.backend.alive(this.state.pids.workers[role] ?? -1)) continue;
       this.state.pids.workers[role] = this.backend.spawnPane(role, [process.execPath, cliPath(), "_worker", String(this.issue), role]);
     }
