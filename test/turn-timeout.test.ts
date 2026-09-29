@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { alive, paths, type State, writeState } from "../src/state.js";
 import { EXAMPLE_CONFIG, fakePath, gdt, tempRepo } from "./helpers.js";
-import { gdt as gdtWorld, lines, stateOf, stopWorlds, supervisorLog, waitFor, world, type World } from "./world.js";
+import { FAKE_GH, gdt as gdtWorld, lines, stateOf, stopWorlds, supervisorLog, waitFor, world, type World } from "./world.js";
 
 afterEach(stopWorlds);
 
@@ -19,6 +19,19 @@ async function waitForRunningTester(w: World, pidFile = join(w.root, "scripts/te
   await waitFor("the tester turn", () => stateOf(w).status === "running" && stateOf(w).role === "tester");
   await waitFor("the tester agent pid", () => existsSync(pidFile));
   return Number(readFileSync(pidFile, "utf8").trim());
+}
+
+/**
+ * Makes every fake-gh call sleep, so on a restart the replacement worker writes its interruption
+ * result before the supervisor's next poll. Without it the first poll usually wins the race, and the
+ * regression it guards (a restart turning an overdue turn `failed`) would not show.
+ */
+function slowGh(w: World, seconds = 0.4): void {
+  writeFileSync(
+    join(w.bin, "gh"),
+    `#!/bin/sh\n/bin/sleep ${seconds}\nexec "${process.execPath}" "${FAKE_GH}" "${w.github}" "$@"\n`,
+  );
+  chmodSync(join(w.bin, "gh"), 0o755);
 }
 
 describe("AC-1: a turn that exceeds the time limit ends in blocked and its agent is stopped", { timeout: 30_000 }, () => {
@@ -65,6 +78,39 @@ describe("AC-1: a turn that exceeds the time limit ends in blocked and its agent
     const notifications = lines(join(w.bin, "notifications"));
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toContain(reason);
+  });
+});
+
+describe("AC-1: a restarted supervisor blocks an overdue in-flight turn", { timeout: 60_000 }, () => {
+  it("blocks with the timeout reason instead of failing when the turn is past its deadline", async () => {
+    const w = world({
+      pr: true,
+      turnTimeoutMinutes: 0.02,
+      developer: "gh fake-record 40 handoff\nexit 0\n",
+      tester: sleepingTester(),
+    });
+    expect(gdtWorld(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+    await waitFor("the tester turn", () => stateOf(w).status === "running" && stateOf(w).role === "tester");
+    const key = stateOf(w).inflight?.key as string;
+    await waitForRunningTester(w);
+
+    // The issue assumption: an overdue turn blocks on a restarted supervisor's first poll. `gdt stop`
+    // keeps the in-flight turn and its `started` marker but removes the worker that never wrote a
+    // result. The slow fake gh keeps the poll behind the replacement worker, which would otherwise
+    // write an interruption result and turn the restart into `failed` (finding R-1).
+    await new Promise((done) => setTimeout(done, 1500));
+    expect(gdtWorld(w, "stop", "12")).toMatchObject({ code: 0 });
+    slowGh(w);
+    expect(gdtWorld(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+
+    const reason = "tester turn exceeded 0.02 minutes";
+    await waitFor("the timeout block after the restart", () => stateOf(w).reason === reason);
+    const state = stateOf(w);
+    expect(state.status).toBe("blocked");
+    expect(state.role).toBe("tester");
+    expect(state.inflight).toMatchObject({ key, timed_out: true });
+    // The overdue turn was settled before any replacement worker could write an interruption result.
+    expect(existsSync(paths(w.root, 12, w.env).result(key))).toBe(false);
   });
 });
 

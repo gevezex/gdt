@@ -224,13 +224,43 @@ class Supervisor {
     this.save();
   }
 
+  /**
+   * AC-1: settles an in-flight turn that is already past its deadline before replacement workers
+   * start. A replacement worker that finds the turn's `started` marker writes an interruption result
+   * (exit code null), which would otherwise make the restarted supervisor report `failed` instead of
+   * the required retryable `blocked` (issue Assumptions). A result file ends the turn (issue
+   * Definitions), so a finished turn is left to `tick` (AC-2). Returns the settled role, so
+   * `startWorkers` keeps its FAILED pane and starts no worker for it.
+   */
+  private settleOverdueTurn(now: Date): Role | null {
+    const running = this.state.inflight;
+    if (running === null || running.violation !== undefined || running.missing) return null;
+    if (running.timed_out === true) {
+      this.setRoleState(running.role, "FAILED");
+      return running.role;
+    }
+    const limit = this.config.workflow.turn_timeout_minutes;
+    if (readJson<TurnResult>(this.p.result(running.key)) !== null) return null;
+    if (now.getTime() < turnDeadline(running.dispatched_at, limit).getTime()) return null;
+    running.timed_out = true;
+    this.stopRole(running.role);
+    this.setRoleState(running.role, "FAILED");
+    this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
+    log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
+    return running.role;
+  }
+
   startWorkers(): void {
     this.backend.ensureWorkspace();
     // AC-1: the agents overview shows the role next to the agent name, once per `gdt start`.
     this.setDisplay("supervisor", "gdt · supervisor");
     this.backend.setTitle("supervisor", "supervisor · starting");
     this.reportState("supervisor", supervisorAgentState(this.state.status));
+    // AC-1: settle an overdue in-flight turn before its replacement worker can write a result.
+    const settled = this.settleOverdueTurn(new Date());
     for (const role of ROLES) {
+      // A settled role keeps its FAILED pane and gets no worker until `gdt retry` and `gdt start`.
+      if (role === settled) continue;
       this.setRoleState(role, "WAITING");
       this.setDisplay(role, `${role} · ${this.agents[role]}`);
       if (this.backend.alive(this.state.pids.workers[role] ?? -1)) continue;
@@ -291,6 +321,7 @@ class Supervisor {
       // stays, even if a result file appears later; only `gdt retry` lifts it (Assumptions).
       const limit = this.config.workflow.turn_timeout_minutes;
       if (running.timed_out === true) {
+        this.setRoleState(running.role, "FAILED");
         this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
         return "continue";
       }
