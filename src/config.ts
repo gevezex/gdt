@@ -20,6 +20,10 @@ export const DEFAULT_LANGUAGE = "en";
 export const DEFAULT_MAX_ACCEPTANCE_CRITERIA = 8;
 /** AC-4: the turn time limit in minutes when `workflow.turn_timeout_minutes` is absent. */
 export const DEFAULT_TURN_TIMEOUT_MINUTES = 60;
+/** The inactivity window in minutes when `workflow.turn_idle_minutes` is absent. */
+export const DEFAULT_TURN_IDLE_MINUTES = 10;
+/** The hard limit in minutes when `workflow.turn_max_minutes` is absent. */
+export const DEFAULT_TURN_MAX_MINUTES = 120;
 
 export type Agent = (typeof AGENTS)[number];
 export type Role = (typeof ROLES)[number];
@@ -75,20 +79,34 @@ function configSchemaFor(testAgents: boolean) {
     roles: z
       .strictObject({ developer: role.optional(), tester: role.optional(), reviewer: role.optional() })
       .optional(),
-    workflow: z.strictObject({
-      max_correction_rounds: z.int().min(0).default(2),
-      // Deliberately without a default: an empty gate must be an explicit choice.
-      required_checks: z.array(z.string().min(1)),
-      allow_no_required_checks: z.boolean().default(false),
-      terminal: z.enum(TERMINALS).default("herdr"),
-      supervisor_pane: z.boolean().default(false),
-      // Default `tabs`: one tab per managed pane. `split` keeps the panes in one tab.
-      herdr_layout: z.enum(HERDR_LAYOUTS).default("tabs"),
-      poll_seconds: z.number().positive().default(30),
-      handoff_checks: z.int().min(1).default(5),
-      // AC-4: a positive number of minutes per turn, 60 by default; zero or negative is invalid.
-      turn_timeout_minutes: z.number().positive().default(DEFAULT_TURN_TIMEOUT_MINUTES),
-    }),
+    workflow: z
+      .strictObject({
+        max_correction_rounds: z.int().min(0).default(2),
+        // Deliberately without a default: an empty gate must be an explicit choice.
+        required_checks: z.array(z.string().min(1)),
+        allow_no_required_checks: z.boolean().default(false),
+        terminal: z.enum(TERMINALS).default("herdr"),
+        supervisor_pane: z.boolean().default(false),
+        // Default `tabs`: one tab per managed pane. `split` keeps the panes in one tab.
+        herdr_layout: z.enum(HERDR_LAYOUTS).default("tabs"),
+        poll_seconds: z.number().positive().default(30),
+        handoff_checks: z.int().min(1).default(5),
+        // AC-4: a positive number of minutes per turn, 60 by default; zero or negative is invalid.
+        turn_timeout_minutes: z.number().positive().default(DEFAULT_TURN_TIMEOUT_MINUTES),
+        // A turn past its deadline keeps running while it was active within this many minutes.
+        turn_idle_minutes: z.number().positive().default(DEFAULT_TURN_IDLE_MINUTES),
+        // A turn still active this long after its dispatch asks the user (`gdt extend` or `gdt retry`).
+        turn_max_minutes: z.number().positive().default(DEFAULT_TURN_MAX_MINUTES),
+      })
+      .superRefine((workflow, ctx) => {
+        if (workflow.turn_max_minutes < workflow.turn_timeout_minutes) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["turn_max_minutes"],
+            message: `must be at least workflow.turn_timeout_minutes (${workflow.turn_timeout_minutes})`,
+          });
+        }
+      }),
     contract: z
       .strictObject({
         max_acceptance_criteria: z.int().min(1).default(DEFAULT_MAX_ACCEPTANCE_CRITERIA),

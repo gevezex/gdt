@@ -90,7 +90,7 @@ export function boundaryViolation(role: Role, before: Checkout, root: string, en
 }
 
 /** Runs one invocation and passes the agent's exit code through unchanged (null when killed by a signal). */
-export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<number | null> {
+export function runInvocation(inv: Invocation, cwd: string, env: Env, onSpawn?: (pid: number) => void): Promise<number | null> {
   const [command, ...args] = inv.argv;
   return new Promise((done) => {
     let stdin: number | "ignore" = "ignore";
@@ -111,6 +111,8 @@ export function runInvocation(inv: Invocation, cwd: string, env: Env): Promise<n
       detached: true,
     });
     activeAgent = child;
+    // The agent's pid is its process group id; the supervisor samples that group's activity.
+    if (child.pid !== undefined) onSpawn?.(child.pid);
     const close = () => {
       if (typeof stdin === "number") closeSync(stdin);
     };
@@ -206,7 +208,7 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     GDT_DISPATCH_KEY: dispatch.key,
   };
   const before = checkout(root, env);
-  const exitCode = await runInvocation(inv, root, turnEnv);
+  const exitCode = await runInvocation(inv, root, turnEnv, (pid) => writeFileSync(p.agent(dispatch.key), `${pid}\n`));
   const violation = boundaryViolation(role, before, root, env);
   if (violation !== undefined) log(violation);
   return finish(exitCode, violation);

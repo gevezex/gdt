@@ -12,7 +12,7 @@ import { loadLocale, shippedLanguages } from "./locale.js";
 import { allowRound, answer, installSkill, pause, resume, setAgent, steer } from "./steering.js";
 import { supervise } from "./supervisor.js";
 import { work } from "./worker.js";
-import { type CommandResult, retry, start, status, stop, wait } from "./workflow.js";
+import { type CommandResult, extend, retry, start, status, stop, wait } from "./workflow.js";
 
 export interface Io {
   cwd: string;
@@ -40,6 +40,7 @@ Commands:
   wait          Wait until the workflow needs attention
   stop          Stop the workflow for an issue; start resumes it
   retry         Prepare a controlled retry of the failed turn
+  extend        Give a turn that is still active at its hard limit more time
   answer        Answer an open question
   steer         Send a directive to one role
   pause         Stop dispatching new turns
@@ -122,6 +123,12 @@ Stops the supervisor, the role workers and any running agent turn.
 
 Stops the failed or interrupted workflow and clears that turn so
 "gdt start <issue>" runs it again.
+`,
+  extend: `Usage: gdt extend <issue>
+
+Gives a turn that is still active at its hard limit (workflow.turn_max_minutes)
+that many more minutes, counted from now. Only valid while the workflow is
+blocked at a turn's hard limit.
 `,
   pause: `Usage: gdt pause <issue>
 
@@ -454,26 +461,23 @@ function emit(result: CommandResult, io: Io): number {
   return result.code;
 }
 
-type WorkflowCommandName = "start" | "status" | "stop" | "retry" | "pause" | "resume" | "allow-round";
+type WorkflowCommandName = "start" | "status" | "stop" | "retry" | "extend" | "pause" | "resume" | "allow-round";
 
 function workflowCommand(command: WorkflowCommandName, args: readonly string[], io: Io): number {
   const parsed = issueArgs(command, args, io, command === "status");
   if (typeof parsed === "number") return parsed;
   const { issue, json } = parsed;
-  const result =
-    command === "start"
-      ? start(issue, io.cwd, io.env)
-      : command === "stop"
-        ? stop(issue, io.cwd, io.env)
-        : command === "retry"
-          ? retry(issue, io.cwd, io.env)
-          : command === "pause"
-            ? pause(issue, io.cwd, io.env)
-            : command === "resume"
-              ? resume(issue, io.cwd, io.env)
-              : command === "allow-round"
-                ? allowRound(issue, io.cwd, io.env)
-                : status(issue, io.cwd, io.env, json);
+  const commands: Record<WorkflowCommandName, () => CommandResult> = {
+    start: () => start(issue, io.cwd, io.env),
+    status: () => status(issue, io.cwd, io.env, json),
+    stop: () => stop(issue, io.cwd, io.env),
+    retry: () => retry(issue, io.cwd, io.env),
+    extend: () => extend(issue, io.cwd, io.env),
+    pause: () => pause(issue, io.cwd, io.env),
+    resume: () => resume(issue, io.cwd, io.env),
+    "allow-round": () => allowRound(issue, io.cwd, io.env),
+  };
+  const result = commands[command]();
   return emit(result, io);
 }
 
@@ -602,6 +606,7 @@ export function run(argv: readonly string[], io: Io): number {
     case "status":
     case "stop":
     case "retry":
+    case "extend":
     case "pause":
     case "resume":
     case "allow-round":

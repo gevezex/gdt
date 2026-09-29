@@ -3,7 +3,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { relative } from "node:path";
 import { headless } from "./backends/headless.js";
 import { type Backend, backendFor } from "./backends/index.js";
-import { DEFAULT_TURN_TIMEOUT_MINUTES, loadConfig, ROLES, userConfigPath } from "./config.js";
+import {
+  type ConfigReport,
+  DEFAULT_TURN_MAX_MINUTES,
+  DEFAULT_TURN_TIMEOUT_MINUTES,
+  loadConfig,
+  ROLES,
+  userConfigPath,
+} from "./config.js";
 import { validateContract } from "./contract.js";
 import { findRepository, herdrPreflight, unsupportedAgentFindings } from "./doctor.js";
 import { changedFiles } from "./git.js";
@@ -20,9 +27,20 @@ import {
   readState,
   type State,
   type Status,
+  writeJsonAtomic,
   writeState,
 } from "./state.js";
-import { cliPath, isTimeoutReason, turnDeadline, type TurnResult } from "./supervisor.js";
+import {
+  activeReason,
+  cliPath,
+  type Extension,
+  isHardLimitReason,
+  isTimeoutReason,
+  turnDeadline,
+  turnHardLimit,
+  turnLastActivity,
+  type TurnResult,
+} from "./supervisor.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -223,6 +241,7 @@ function retryable(state: State): boolean {
     (state.reason.includes("without a visible handoff") ||
       state.reason.includes("already ran") ||
       isTimeoutReason(state.reason) ||
+      isHardLimitReason(state.reason) ||
       isInvalidRecordReason(state.reason))
   );
 }
@@ -242,6 +261,7 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
   if (key !== undefined) {
     rmSync(p.started(key), { force: true });
     rmSync(p.result(key), { force: true });
+    rmSync(p.agent(key), { force: true });
     state.dispatched = state.dispatched.filter((known) => known !== key);
   }
   Object.assign(state, {
@@ -253,6 +273,7 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
     pids: { supervisor: null, workers: {} },
   });
   writeState(p, state);
+  rmSync(p.extend, { force: true });
   // Release the lock only now: `gdt wait` must return on the final status, never on the vanished lock.
   releaseAfterStop(p);
   return ok(`Retry prepared for #${issue}. Next: ${describe(state, false).next}\n`);
@@ -260,6 +281,8 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
 
 function blockedHint(issue: number, reason: string): string {
   if (reason.startsWith("round budget exhausted")) return `gdt allow-round ${issue}`;
+  // AC-4: a turn still active at its hard limit gets more time or is stopped and run again.
+  if (isHardLimitReason(reason)) return `gdt extend ${issue} or gdt retry ${issue}`;
   if (
     reason.includes("without a visible handoff") ||
     reason.includes("already ran") ||
@@ -298,10 +321,56 @@ export function describe(state: State, supervisorAlive: boolean): { line: string
   }
 }
 
-/** The state as status and wait see it: the pause file reports `paused` until the workflow ends. */
-function effectiveState(p: Paths, state: State): State {
+/** A `gdt extend` request for the state's in-flight turn that the supervisor has not applied yet. */
+function pendingExtension(p: Paths, state: State): Extension | null {
+  const extension = readJson<Extension>(p.extend);
+  return extension !== null && extension.key === state.inflight?.key ? extension : null;
+}
+
+/**
+ * The state as status and wait see it: the pause file reports `paused` until the workflow ends, and
+ * AC-5: a pending `gdt extend` reports the turn `running` with its new hard limit before the
+ * supervisor's next poll applies it.
+ */
+function effectiveState(p: Paths, state: State, turnTimeoutMinutes = DEFAULT_TURN_TIMEOUT_MINUTES): State {
   const paused = existsSync(p.pause) && state.status !== "stopped" && state.status !== "failed";
-  return paused ? { ...state, status: "paused" as Status, reason: "" } : state;
+  if (paused) return { ...state, status: "paused" as Status, reason: "" };
+  const extension = pendingExtension(p, state);
+  if (extension === null || state.inflight === null || state.status !== "blocked" || !isHardLimitReason(state.reason)) return state;
+  const inflight = { ...state.inflight, hard_limit: extension.hard_limit, at_hard_limit: false };
+  return { ...state, status: "running", reason: activeReason(inflight.role, turnTimeoutMinutes), inflight };
+}
+
+/** The workflow's turn limits, or the defaults when the config is unreadable. */
+function turnLimits(report: ConfigReport): { timeout: number; max: number } {
+  return report.valid
+    ? { timeout: report.workflow.turn_timeout_minutes, max: report.workflow.turn_max_minutes }
+    : { timeout: DEFAULT_TURN_TIMEOUT_MINUTES, max: DEFAULT_TURN_MAX_MINUTES };
+}
+
+/** `gdt extend <n>`: grants a turn blocked at its hard limit `turn_max_minutes` more from now (AC-5). */
+export function extend(issue: number, cwd: string, env: Env): CommandResult {
+  const root = findRepository(cwd) ?? cwd;
+  const p = paths(root, issue, env);
+  const state = readState(p);
+  if (state === null) return fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
+  const limits = turnLimits(loadConfig(root, env).report);
+  const effective = effectiveState(p, state, limits.timeout);
+  const inflight = state.inflight;
+  if (
+    effective.status !== "blocked" ||
+    !isHardLimitReason(effective.reason) ||
+    inflight === null ||
+    readJson<TurnResult>(p.result(inflight.key)) !== null
+  ) {
+    const { line, next } = describe(effective, lockHolder(p) !== null);
+    return fail(`Workflow for #${issue} is not waiting at a turn's hard limit (${line}). Next: ${next}\n`);
+  }
+  const hardLimit = new Date(Date.now() + limits.max * 60_000).toISOString();
+  // The supervisor applies the request on its next poll; status and wait report it at once.
+  writeJsonAtomic(p.extend, { key: inflight.key, hard_limit: hardLimit } satisfies Extension);
+  const { next } = describe(effectiveState(p, state, limits.timeout), lockHolder(p) !== null);
+  return ok(`Extended the ${inflight.role} turn of #${issue}; new hard limit ${hardLimit}. Next: ${next}\n`);
 }
 
 /** `gdt status <n>`. The pause file reports `paused` even before the supervisor notices it. */
@@ -311,24 +380,28 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
   const state = readState(p);
   if (state === null) {
     // AC-5: the same keys, null without a dispatched turn.
-    const empty = { issue, status: null, turn_started_at: null, turn_deadline: null, next_step: `gdt start ${issue}` };
+    const empty = {
+      issue,
+      status: null,
+      turn_started_at: null,
+      turn_deadline: null,
+      turn_last_activity: null,
+      turn_hard_limit: null,
+      next_step: `gdt start ${issue}`,
+    };
     return json ? { code: 1, stdout: `${JSON.stringify(empty, null, 2)}\n`, stderr: "" } : fail(`No workflow for #${issue}. Next: gdt start ${issue}\n`);
   }
-  const effective = effectiveState(p, state);
+  const { report } = loadConfig(root, env);
+  const limits = turnLimits(report);
+  const effective = effectiveState(p, state, limits.timeout);
   const { line, next } = describe(effective, lockHolder(p) !== null);
   if (!json) return ok(`${line}. Next: ${next}\n`);
 
-  let maxRounds: number | null = null;
-  let turnTimeoutMinutes = DEFAULT_TURN_TIMEOUT_MINUTES;
-  const { report } = loadConfig(root, env);
-  if (report.valid) {
-    maxRounds = report.workflow.max_correction_rounds;
-    turnTimeoutMinutes = report.workflow.turn_timeout_minutes;
-  }
-  // AC-5 (finding R-2): the in-flight turn's start and deadline. A result file ends the turn (issue
-  // Definitions), so a turn that has finished but still awaits its handoff check reports null.
-  const inflight = state.inflight;
-  const turnStart = inflight !== null && readJson<TurnResult>(p.result(inflight.key)) === null ? inflight.dispatched_at : null;
+  const maxRounds = report.valid ? report.workflow.max_correction_rounds : null;
+  // The in-flight turn's start, deadline, last activity and hard limit. A result file ends the turn,
+  // so a turn that has finished but still awaits its handoff check reports null for all four.
+  const inflight = effective.inflight !== null && readJson<TurnResult>(p.result(effective.inflight.key)) === null ? effective.inflight : null;
+  const turnStart = inflight?.dispatched_at ?? null;
   const out = {
     issue,
     workflow_id: state.workflow_id,
@@ -341,7 +414,10 @@ export function status(issue: number, cwd: string, env: Env, json: boolean): Com
     pr_number: state.pr_number,
     open_findings: state.open_findings ?? [],
     turn_started_at: turnStart,
-    turn_deadline: turnStart === null ? null : turnDeadline(turnStart, turnTimeoutMinutes).toISOString(),
+    turn_deadline: turnStart === null ? null : turnDeadline(turnStart, limits.timeout).toISOString(),
+    // AC-8: null without a result-less in-flight turn.
+    turn_last_activity: inflight === null ? null : turnLastActivity(inflight),
+    turn_hard_limit: inflight === null ? null : turnHardLimit(inflight, limits.max).toISOString(),
     overrides: readOverrides(p),
     next_step: next,
   };
@@ -363,11 +439,12 @@ export function wait(issue: number, cwd: string, env: Env, options: WaitOptions)
   const root = findRepository(cwd) ?? cwd;
   const p = paths(root, issue, env);
   const deadline = options.timeoutSeconds === null ? null : Date.now() + options.timeoutSeconds * 1000;
+  const turnTimeout = turnLimits(loadConfig(root, env).report).timeout;
   for (;;) {
     const state = readState(p);
     // No workflow is status's error path (AC-6); an action status returns at once (AC-1, AC-2).
     if (state === null) return status(issue, cwd, env, options.json);
-    const effective = effectiveState(p, state);
+    const effective = effectiveState(p, state, turnTimeout);
     if (ACTION_STATUSES.includes(effective.status)) return status(issue, cwd, env, options.json);
     // A dead supervisor ends the wait, except while the operator paused it deliberately (AC-4).
     // A deliberate stop is not a dead supervisor: its final state follows once the stop window ends.
