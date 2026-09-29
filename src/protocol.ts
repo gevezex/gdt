@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ROLES } from "./config.js";
+import { type Role, ROLES } from "./config.js";
 
 /** Record kinds; the marker is `[gdt-<kind>:v1]` ... `[/gdt-<kind>:v1]`. */
 export const KINDS = ["handoff", "test", "review", "question", "answer", "directive", "round"] as const;
@@ -88,12 +88,35 @@ export interface Comment {
 
 export interface Diagnostic {
   comment_id: number;
+  author: string;
   kind: Kind;
+  reason: string;
+}
+
+/**
+ * An invalid role record, kept so the role's retried turn can be told how its record was rejected
+ * (AC-2). It is stored in the workflow state, not derived from the thread, because `gdt retry`
+ * clears the in-flight turn before the next dispatch.
+ */
+export interface InvalidRecord {
+  role: Role;
+  kind: Kind;
+  comment_id: number;
   reason: string;
 }
 
 export function marker(kind: Kind, closing = false): string {
   return `[${closing ? "/" : ""}gdt-${kind}:v1]`;
+}
+
+/** AC-1: the blocked reason for a turn whose role posted only an invalid record. */
+export function invalidRecordReason(role: Role, diagnostic: Diagnostic): string {
+  return `${role} posted an invalid record ${marker(diagnostic.kind)} in comment ${diagnostic.comment_id}: ${diagnostic.reason}`;
+}
+
+/** True when a blocked reason reports an invalid record, so `gdt retry` can lift it (AC-1). */
+export function isInvalidRecordReason(reason: string): boolean {
+  return reason.includes(" posted an invalid record ");
 }
 
 /** The comment body carrying one record: opening marker, JSON object and closing marker. */
@@ -131,12 +154,12 @@ export function parseRecords(comments: readonly Comment[]): { records: ProtocolR
       try {
         json = JSON.parse(unfence(match[2] ?? ""));
       } catch {
-        diagnostics.push({ comment_id: comment.id, kind, reason: "invalid JSON" });
+        diagnostics.push({ comment_id: comment.id, author: comment.author, kind, reason: "invalid JSON" });
         continue;
       }
       const parsed = schemas[kind].safeParse(json);
       if (!parsed.success) {
-        diagnostics.push({ comment_id: comment.id, kind, reason: schemaReason(parsed.error) });
+        diagnostics.push({ comment_id: comment.id, author: comment.author, kind, reason: schemaReason(parsed.error) });
         continue;
       }
       records.push({

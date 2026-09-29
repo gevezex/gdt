@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { Agent, Role } from "./config.js";
+import type { InvalidRecord } from "./protocol.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -39,6 +40,8 @@ export interface Inflight {
   checks: number;
   /** Set when the handoff never became visible; the key stays blocked until a retry. */
   missing: boolean;
+  /** AC-1: the blocked reason of that handoff, so a restart reports it again. */
+  missing_reason?: string;
   /** Set when the turn broke a role boundary; the key stays blocked until a retry. */
   violation?: string;
 }
@@ -62,6 +65,8 @@ export interface State {
   inflight: Inflight | null;
   /** The dispatch key of an already-ran block; `gdt retry` removes it from `dispatched`. */
   blocked_key?: string | null;
+  /** AC-2: the invalid record of the last blocked turn, passed to that role's retried prompt. */
+  retry_record?: InvalidRecord | null;
   notified_status: Status | null;
   /** Per role, the highest comment id seen at its previous dispatch; later directives are pending. */
   directive_cursor?: Partial<Record<Role, number>>;

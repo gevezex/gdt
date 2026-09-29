@@ -9,6 +9,7 @@ import { findRepository, herdrPreflight, unsupportedAgentFindings } from "./doct
 import { changedFiles } from "./git.js";
 import { issueBody, repository } from "./github.js";
 import { loadLocale } from "./locale.js";
+import { isInvalidRecordReason } from "./protocol.js";
 import { alive, lockHolder, type Paths, paths, readOverrides, readState, type State, type Status, writeState } from "./state.js";
 import { cliPath } from "./supervisor.js";
 
@@ -206,7 +207,10 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
 /** States from which `gdt retry` may clear the interrupted turn: a failed turn, or a blocked one that never produced a usable record. */
 function retryable(state: State): boolean {
   if (state.status === "failed") return true;
-  return state.status === "blocked" && (state.reason.includes("without a visible handoff") || state.reason.includes("already ran"));
+  return (
+    state.status === "blocked" &&
+    (state.reason.includes("without a visible handoff") || state.reason.includes("already ran") || isInvalidRecordReason(state.reason))
+  );
 }
 
 /** `gdt retry <n>`: stops the workflow and clears the interrupted turn so `gdt start` runs it again. */
@@ -242,7 +246,7 @@ export function retry(issue: number, cwd: string, env: Env): CommandResult {
 
 function blockedHint(issue: number, reason: string): string {
   if (reason.startsWith("round budget exhausted")) return `gdt allow-round ${issue}`;
-  if (reason.includes("without a visible handoff") || reason.includes("already ran")) return `gdt retry ${issue}`;
+  if (reason.includes("without a visible handoff") || reason.includes("already ran") || isInvalidRecordReason(reason)) return `gdt retry ${issue}`;
   if (reason.includes("without a Changelog update")) return `add a Changelog entry to issue #${issue}, or revert the body change`;
   return "resolve the cause; the supervisor checks again on every poll";
 }

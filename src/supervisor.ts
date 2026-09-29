@@ -10,9 +10,10 @@ import { comments, issueSnapshot, pullRequest, repository, viewer } from "./gith
 import { loadLocale, type Locale } from "./locale.js";
 import { notify } from "./notify.js";
 import { type Directive, pendingDirectives } from "./prompts.js";
-import { parseRecords, type ProtocolRecord } from "./protocol.js";
+import { type Diagnostic, invalidRecordReason, type Kind, parseRecords, type ProtocolRecord } from "./protocol.js";
 import {
   acquireLock,
+  type Inflight,
   logTimestamp,
   NOTIFY_STATUSES,
   type Paths,
@@ -100,6 +101,17 @@ function roleOf(record: ProtocolRecord): Role | null {
     default:
       return null;
   }
+}
+
+/** The record kind each workflow role writes; a diagnostic of another kind is never that role's. */
+const ROLE_OF_KIND: Partial<Record<Kind, Role>> = { handoff: "developer", test: "tester", review: "reviewer" };
+
+/** AC-1: the newest invalid role record the role posted after the turn's `after_comment_id`. */
+function invalidRecordFor(inflight: Inflight, diagnostics: readonly Diagnostic[], trusted: readonly string[]): Diagnostic | undefined {
+  return diagnostics
+    .filter((d) => ROLE_OF_KIND[d.kind] === inflight.role && trusted.includes(d.author) && d.comment_id > inflight.after_comment_id)
+    // Newest comment wins when the role posted several invalid records.
+    .sort((a, b) => b.comment_id - a.comment_id)[0];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -243,8 +255,9 @@ class Supervisor {
         return "continue";
       }
       if (running.missing) {
-        // Also restores the status after a stop and start.
-        this.setStatus("blocked", `${running.role} finished without a visible handoff`, { role: running.role, round: running.round });
+        // Also restores the status after a stop and start. AC-1: an invalid record keeps its reason.
+        const reason = running.missing_reason ?? `${running.role} finished without a visible handoff`;
+        this.setStatus("blocked", reason, { role: running.role, round: running.round });
         return "continue";
       }
       const result = readJson<TurnResult>(this.p.result(running.key));
@@ -289,7 +302,7 @@ class Supervisor {
 
     const thread = [...comments(this.state.repository, this.issue, this.p.root, this.env)];
     if (pr !== null) thread.push(...comments(this.state.repository, pr.number, this.p.root, this.env));
-    const { records } = parseRecords(thread);
+    const { records, diagnostics } = parseRecords(thread);
     const trusted = records.filter((r) => this.trusted.includes(r.author));
 
     const inflight = this.state.inflight;
@@ -297,16 +310,34 @@ class Supervisor {
       const visible = trusted.some((r) => roleOf(r) === inflight.role && r.comment_id > inflight.after_comment_id);
       if (!visible) {
         inflight.checks += 1;
-        log(`handoff check ${inflight.checks}/${this.config.workflow.handoff_checks} for ${inflight.key}: not visible`);
+        // AC-1: an invalid record is named with its validation error instead of `not visible`;
+        // AC-4: without any role record the message and log line stay as before.
+        const invalid = invalidRecordFor(inflight, diagnostics, this.trusted);
+        log(
+          `handoff check ${inflight.checks}/${this.config.workflow.handoff_checks} for ${inflight.key}: ` +
+            (invalid === undefined ? "not visible" : invalid.reason),
+        );
         if (inflight.checks >= this.config.workflow.handoff_checks) {
           inflight.missing = true;
-          this.setStatus("blocked", `${inflight.role} finished without a visible handoff`);
+          const reason =
+            invalid === undefined
+              ? `${inflight.role} finished without a visible handoff`
+              : invalidRecordReason(inflight.role, invalid);
+          inflight.missing_reason = reason;
+          const extra: Partial<State> = { role: inflight.role, round: inflight.round };
+          // AC-2: `gdt retry` keeps this record; the role's next turn reads it into its prompt.
+          if (invalid !== undefined) {
+            extra.retry_record = { role: inflight.role, kind: invalid.kind, comment_id: invalid.comment_id, reason: invalid.reason };
+          }
+          this.setStatus("blocked", reason, extra);
         } else {
           this.setStatus("running", `waiting for the ${inflight.role} handoff to become visible`, { role: inflight.role, round: inflight.round });
         }
         return "continue";
       }
       this.state.inflight = null;
+      // AC-2: the role's rejection explanation is spent once a valid record is visible.
+      if (this.state.retry_record?.role === inflight.role) this.state.retry_record = null;
     }
 
     const snapshot = {

@@ -151,8 +151,12 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     return finish(78);
   }
   const promptFile = p.prompt(dispatch.key);
+  // AC-2: a retried turn is told how its previous record was rejected. Reading the state (rather than
+  // the dispatch file) avoids a race with the worker that started before `gdt retry` finished.
+  const rejected = readState(p)?.retry_record;
+  const promptDispatch = rejected != null && rejected.role === role ? { ...dispatch, invalid_record: rejected } : dispatch;
   try {
-    writeFileSync(promptFile, buildPrompt(role, dispatch, { root, extraRules: report.contract.extra_rules }));
+    writeFileSync(promptFile, buildPrompt(role, promptDispatch, { root, extraRules: report.contract.extra_rules }));
   } catch (err) {
     log(`cannot build the prompt: ${err instanceof Error ? err.message : String(err)}`);
     return finish(78);
