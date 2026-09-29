@@ -9,6 +9,7 @@ import { fakeHerdr, tempRepo } from "./helpers.js";
 export const CLI = resolve("dist/cli.js");
 export const FAKE_GH = resolve("test/fixtures/fake-gh.mjs");
 export const GIT = which("git", process.env) as string;
+export const PS = which("ps", process.env) as string;
 export const HEAD = "b".repeat(40);
 
 export const BODY = `## Plain language
@@ -94,6 +95,12 @@ export interface Options {
   reportFail?: boolean;
   /** `workflow.turn_timeout_minutes`; omitted when undefined, so the gdt default (60) applies. */
   turnTimeoutMinutes?: number;
+  /** `workflow.turn_idle_minutes`; omitted when undefined, so the gdt default (10) applies. */
+  turnIdleMinutes?: number;
+  /** `workflow.turn_max_minutes`; omitted when undefined, so the gdt default (120) applies. */
+  turnMaxMinutes?: number;
+  /** Extra environment for every gdt process of the world. */
+  env?: Record<string, string>;
   extraFiles?: Record<string, string>;
 }
 
@@ -103,6 +110,8 @@ export function config(
   supervisorPane?: boolean,
   herdrLayout?: "split" | "tabs",
   turnTimeoutMinutes?: number,
+  turnIdleMinutes?: number,
+  turnMaxMinutes?: number,
 ): string {
   return [
     'language = "en"',
@@ -114,6 +123,8 @@ export function config(
     "poll_seconds = 0.1",
     `handoff_checks = ${handoffChecks}`,
     ...(turnTimeoutMinutes === undefined ? [] : [`turn_timeout_minutes = ${turnTimeoutMinutes}`]),
+    ...(turnIdleMinutes === undefined ? [] : [`turn_idle_minutes = ${turnIdleMinutes}`]),
+    ...(turnMaxMinutes === undefined ? [] : [`turn_max_minutes = ${turnMaxMinutes}`]),
     "",
   ].join("\n");
 }
@@ -138,6 +149,8 @@ export function world(options: Options = {}): World {
       options.supervisorPane,
       options.herdrLayout,
       options.turnTimeoutMinutes,
+      options.turnIdleMinutes,
+      options.turnMaxMinutes,
     ),
     "scripts/developer.sh": options.developer ?? "exit 0\n",
     "scripts/tester.sh": options.tester ?? "/bin/sleep 60\n",
@@ -150,6 +163,8 @@ export function world(options: Options = {}): World {
 
   const bin = mkdtempSync(join(tmpdir(), "gdt-bin-"));
   symlinkSync(GIT, join(bin, "git"));
+  // The supervisor samples the agent process group's CPU time with ps.
+  symlinkSync(PS, join(bin, "ps"));
   fakeHerdr(bin);
   const github = join(bin, "github.json");
   writeFileSync(join(bin, "gh"), `#!/bin/sh\nexec "${process.execPath}" "${FAKE_GH}" "${github}" "$@"\n`);
@@ -169,7 +184,7 @@ export function world(options: Options = {}): World {
       comments: {},
     }),
   );
-  const env: Record<string, string> = { PATH: bin, HOME: root, GDT_TEST_AGENTS: "1" };
+  const env: Record<string, string> = { PATH: bin, HOME: root, GDT_TEST_AGENTS: "1", ...options.env };
   if (options.reportFail ?? false) env.FAKE_HERDR_REPORT_FAIL = "1";
   const w = { root, bin, github, env };
   worlds.push(w);

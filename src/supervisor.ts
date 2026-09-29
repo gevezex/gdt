@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type ActivitySample, formatSignals, groupUsage, nextBaseline, opencodeDatabase, sample, type Signals, signals } from "./activity.js";
 import type { AgentState } from "./backends/backend.js";
 import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, type ResolvedConfig, type Role, ROLES } from "./config.js";
@@ -19,6 +22,7 @@ import {
   type Paths,
   paths,
   readJson,
+  readOverrides,
   readState,
   type State,
   type Status,
@@ -81,19 +85,57 @@ export function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-/** AC-1: the blocked reason of a turn that ran past its deadline. */
-export function timeoutReason(role: Role, minutes: number): string {
-  return `${role} turn exceeded ${minutes} minutes`;
+/** AC-1: the running reason of a turn past its deadline that is still active. */
+export function activeReason(role: Role, limit: number): string {
+  return `${role} turn past the ${limit}-minute limit, still active`;
 }
 
-/** AC-5: the deadline of a turn dispatched at `dispatchedAt`, with `minutes` as the configured limit. */
+/** AC-2: the blocked reason of a turn stopped because it was inactive after its deadline. */
+export function inactiveReason(role: Role, idle: number, limit: number): string {
+  return `${role} turn inactive for ${idle} minutes after the ${limit}-minute limit`;
+}
+
+/** AC-4: the blocked reason of a turn that is still active at its hard limit. */
+export function hardLimitReason(role: Role, minutes: number): string {
+  return `${role} turn still active after ${minutes} minutes`;
+}
+
+/** AC-6: the blocked reason of a turn whose agent and worker are gone without a result. */
+export function exitedReason(role: Role): string {
+  return `${role} agent exited without a result`;
+}
+
+/** The deadline of a turn dispatched at `dispatchedAt`, with `minutes` as the configured limit. */
 export function turnDeadline(dispatchedAt: string, minutes: number): Date {
   return new Date(new Date(dispatchedAt).getTime() + minutes * 60_000);
 }
 
-/** AC-3: true when a blocked reason is a turn timeout, so `gdt retry` can lift it. */
+/** AC-8: the turn's last activity: `dispatched_at` until an activity signal fires. */
+export function turnLastActivity(inflight: Inflight): string {
+  return inflight.last_activity ?? inflight.dispatched_at;
+}
+
+/** AC-8: the turn's hard limit: `dispatched_at + turn_max_minutes` until `gdt extend` moves it. */
+export function turnHardLimit(inflight: Inflight, maxMinutes: number): Date {
+  return inflight.hard_limit === undefined ? turnDeadline(inflight.dispatched_at, maxMinutes) : new Date(inflight.hard_limit);
+}
+
+/** AC-2/AC-6: true when a blocked reason is a stopped or exited turn, so `gdt retry` can lift it. */
 export function isTimeoutReason(reason: string): boolean {
-  return reason.includes(" turn exceeded ") && reason.endsWith(" minutes");
+  return /^\w+ turn inactive for [\d.]+ minutes after the [\d.]+-minute limit$/.test(reason) || / agent exited without a result$/.test(reason);
+}
+
+/** AC-4: true when a blocked reason is a turn still active at its hard limit. */
+export function isHardLimitReason(reason: string): boolean {
+  return /^\w+ turn still active after [\d.]+ minutes$/.test(reason);
+}
+
+const NO_SIGNALS: Signals = { cpu: false, tree: false, log: false, opencode: false };
+
+/** A hard limit granted by `gdt extend`, applied by the supervisor on its next poll (AC-5). */
+export interface Extension {
+  key: string;
+  hard_limit: string;
 }
 
 /** One key per role, round, head and contract; a resumed question makes the resumed turn distinct. */
@@ -127,6 +169,10 @@ function invalidRecordFor(inflight: Inflight, diagnostics: readonly Diagnostic[]
     .filter((d) => ROLE_OF_KIND[d.kind] === inflight.role && trusted.includes(d.author) && d.comment_id > inflight.after_comment_id)
     // Newest comment wins when the role posted several invalid records.
     .sort((a, b) => b.comment_id - a.comment_id)[0];
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -224,40 +270,153 @@ class Supervisor {
     this.save();
   }
 
-  /**
-   * AC-1 (finding R-1): settles an in-flight turn that is past its deadline: stops the role's worker
-   * (whose SIGTERM handler ends its detached agent process group), marks the role FAILED and blocks
-   * with the timeout reason. It is called before any GitHub fetch, so a failing `gh` call can never
-   * postpone the timeout. A result file ends the turn (issue Definitions), so only a result-less turn
-   * can time out; once timed out the block stays, even if a result file appears later, until
-   * `gdt retry` (issue Assumptions). Returns "continue" after handling the turn, or null otherwise.
-   */
-  private settleTimedOutTurn(now: Date): "continue" | null {
-    const running = this.state.inflight;
-    if (running === null || running.violation !== undefined || running.missing) return null;
-    const limit = this.config.workflow.turn_timeout_minutes;
-    if (running.timed_out !== true) {
-      // A finished turn is left to `tick` (AC-2); only a result-less turn past its deadline times out.
-      if (readJson<TurnResult>(this.p.result(running.key)) !== null) return null;
-      if (now.getTime() < turnDeadline(running.dispatched_at, limit).getTime()) return null;
-      running.timed_out = true;
-      this.stopRole(running.role);
-      log(`${running.role} turn exceeded ${limit} minutes; worker and agent stopped`);
+  /** The agent process group id the worker recorded for the turn, or null before the agent started. */
+  private agentGroup(key: string): number | null {
+    try {
+      const pid = Number(readFileSync(this.p.agent(key), "utf8").trim());
+      return Number.isInteger(pid) && pid > 0 ? pid : null;
+    } catch {
+      return null;
     }
+  }
+
+  /** AC-2: ends what is left of the agent process group once its worker is stopped. */
+  private stopGroup(pgid: number | null): void {
+    if (pgid === null) return;
+    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+      if (groupUsage(pgid, this.env).processes === 0) return;
+      try {
+        process.kill(-pgid, signal);
+      } catch {
+        return;
+      }
+      for (let waited = 0; waited < 2000 && groupUsage(pgid, this.env).processes !== 0; waited += 100) sleepSync(100);
+    }
+  }
+
+  /** The activity sample of an in-flight turn (issue Definitions). */
+  private sampleTurn(running: Inflight, pgid: number | null): ActivitySample {
+    const agent = readOverrides(this.p)[running.role]?.agent ?? this.agents[running.role];
+    const home = this.env.HOME === undefined || this.env.HOME === "" ? homedir() : this.env.HOME;
+    return sample({
+      root: this.p.root,
+      env: this.env,
+      pgid,
+      logFile: this.config.workflow.terminal === "headless" ? join(this.p.logs, `${running.role}.log`) : null,
+      opencodeDb: agent === "opencode" ? opencodeDatabase(this.env, home) : null,
+    });
+  }
+
+  /**
+   * AC-5: applies a hard limit granted by `gdt extend` for this turn. Returns true when a request was
+   * read; the caller removes it only after saving the poll's status, so `gdt status` never sees the
+   * turn blocked again in between.
+   */
+  private applyExtension(running: Inflight): boolean {
+    const extension = readJson<Extension>(this.p.extend);
+    if (extension === null) return false;
+    if (extension.key === running.key) {
+      running.hard_limit = extension.hard_limit;
+      running.at_hard_limit = false;
+      log(`${running.role} turn hard limit extended to ${extension.hard_limit}`);
+    }
+    return true;
+  }
+
+  /** Blocks the workflow on a stopped or exited turn; the block stays until `gdt retry`. */
+  private blockStopped(running: Inflight): "continue" {
     this.setRoleState(running.role, "FAILED");
-    this.setStatus("blocked", timeoutReason(running.role, limit), { role: running.role, round: running.round });
+    this.setStatus("blocked", running.stop_reason ?? exitedReason(running.role), { role: running.role, round: running.round });
     return "continue";
   }
 
   /**
-   * AC-1: settles an overdue turn before replacement workers start. A replacement worker that finds
-   * the turn's `started` marker writes an interruption result (exit code null), which would
-   * otherwise make the restarted supervisor report `failed` instead of the required retryable
-   * `blocked` (issue Assumptions). Returns the settled role, so `startWorkers` keeps its FAILED pane
-   * and starts no worker for it.
+   * Checks a result-less in-flight turn on every poll, before any GitHub fetch, so a failing `gh`
+   * call never postpones it. It samples the turn's activity and moves its last activity when a
+   * signal fires. AC-6: a turn whose worker and agent are gone on two consecutive polls blocks at
+   * once. Past the deadline, AC-1: an active turn keeps running; AC-2: an inactive one is stopped
+   * and blocked; AC-4: an active one at its hard limit blocks without being stopped. A result file
+   * ends the turn, also at the hard limit; a stopped turn stays blocked even if a result appears.
+   * With `startup`, the worker was not started yet, so a missing worker is not an exited agent.
+   * Returns "continue" when the poll ends here, or null to let `tick` go on.
+   */
+  private settleTurn(now: Date, startup = false): "continue" | null {
+    const running = this.state.inflight;
+    if (running === null || running.violation !== undefined || running.missing) return null;
+    if (running.stop_reason !== undefined) return this.blockStopped(running);
+    if (readJson<TurnResult>(this.p.result(running.key)) !== null) return null;
+    const extended = this.applyExtension(running);
+    const outcome = this.checkActivity(running, now, startup);
+    if (extended) {
+      this.save();
+      rmSync(this.p.extend, { force: true });
+    }
+    return outcome;
+  }
+
+  /** The activity part of `settleTurn` for a result-less in-flight turn. */
+  private checkActivity(running: Inflight, now: Date, startup: boolean): "continue" | null {
+    const workflow = this.config.workflow;
+    const pgid = this.agentGroup(running.key);
+    const current = this.sampleTurn(running, pgid);
+    // On startup the agent of the previous run is gone and gdt's own stop line grew the log, so the
+    // sample only becomes the new baseline: the kept last activity gets no fresh window.
+    const fired = startup ? NO_SIGNALS : signals(current, running.activity);
+    const active = fired.cpu || fired.tree || fired.log || fired.opencode;
+    running.activity = nextBaseline(current, startup ? undefined : running.activity, startup || active);
+    if (active) running.last_activity = now.toISOString();
+
+    // AC-6: an exited agent needs two consecutive polls, so a single unlucky sample never blocks a turn.
+    const workerAlive = this.backend.alive(this.state.pids.workers[running.role] ?? -1);
+    running.exited_polls = !startup && !workerAlive && current.processes === 0 ? (running.exited_polls ?? 0) + 1 : 0;
+    if (running.exited_polls >= 2) {
+      running.stop_reason = exitedReason(running.role);
+      this.stopRole(running.role);
+      log(`${running.role} agent exited without a result`);
+      return this.blockStopped(running);
+    }
+
+    const limit = workflow.turn_timeout_minutes;
+    if (now.getTime() < turnDeadline(running.dispatched_at, limit).getTime()) return null;
+
+    const lastActivity = turnLastActivity(running);
+    // AC-1/AC-3: one line per poll past the deadline, naming every signal and whether it fired.
+    log(`activity check for ${running.key}: ${formatSignals(fired)}; last activity ${lastActivity}`);
+    const context = { role: running.role, round: running.round };
+    const hardLimit = turnHardLimit(running, workflow.turn_max_minutes);
+    const hardMinutes = Math.round(((hardLimit.getTime() - Date.parse(running.dispatched_at)) / 60_000) * 100) / 100;
+    if (running.at_hard_limit === true) {
+      // AC-4: the turn keeps running until `gdt extend`, `gdt retry` or its result.
+      this.setStatus("blocked", hardLimitReason(running.role, hardMinutes), context);
+      return "continue";
+    }
+    if (now.getTime() - Date.parse(lastActivity) >= workflow.turn_idle_minutes * 60_000) {
+      running.timed_out = true;
+      running.stop_reason = inactiveReason(running.role, workflow.turn_idle_minutes, limit);
+      this.stopRole(running.role);
+      this.stopGroup(pgid);
+      log(`${running.stop_reason}; worker and agent stopped`);
+      return this.blockStopped(running);
+    }
+    if (now.getTime() >= hardLimit.getTime()) {
+      running.at_hard_limit = true;
+      this.setStatus("blocked", hardLimitReason(running.role, hardMinutes), context);
+      return "continue";
+    }
+    this.setStatus("running", activeReason(running.role, limit), context);
+    return "continue";
+  }
+
+  /**
+   * Settles an in-flight turn before replacement workers start. A replacement worker that finds the
+   * turn's `started` marker writes an interruption result (exit code null), which would otherwise
+   * turn an inactive overdue turn into `failed` instead of the retryable `blocked`. Returns the
+   * stopped role, so `startWorkers` keeps its FAILED pane and starts no worker for it.
    */
   private settleOverdueTurn(now: Date): Role | null {
-    return this.settleTimedOutTurn(now) === null ? null : (this.state.inflight?.role ?? null);
+    this.settleTurn(now, true);
+    const running = this.state.inflight;
+    return running?.stop_reason === undefined ? null : running.role;
   }
 
   startWorkers(): void {
@@ -291,9 +450,9 @@ class Supervisor {
       this.setStatus("paused", "", { role: null });
       return "continue";
     }
-    // AC-1 (finding R-1): the deadline check runs before any GitHub fetch, so a failing `gh` call
-    // cannot postpone the timeout and leave a hung turn `running` forever.
-    if (this.settleTimedOutTurn(now) !== null) return "continue";
+    // The turn check runs before any GitHub fetch, so a failing `gh` call cannot postpone it and
+    // leave a hung turn `running` forever.
+    if (this.settleTurn(now) !== null) return "continue";
     const { body, pullRequests } = issueSnapshot(this.issue, this.p.root, this.env);
     const bodySha = sha256(body);
     const changelog = sectionText(body, this.locale.sections.changelog) ?? "";
@@ -330,8 +489,8 @@ class Supervisor {
         this.setStatus("blocked", reason, { role: running.role, round: running.round });
         return "continue";
       }
-      // AC-1: a turn past its deadline was already settled at the top of this tick, before the GitHub
-      // fetch. A result-less turn that reaches this point is still in flight.
+      // A turn past its deadline was already settled at the top of this tick, before the GitHub
+      // fetch. A result-less turn that reaches this point is still before its deadline.
       const result = readJson<TurnResult>(this.p.result(running.key));
       if (result === null) {
         this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });

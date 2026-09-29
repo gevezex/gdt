@@ -39,6 +39,7 @@ describe("AC-1: a turn that exceeds the time limit ends in blocked and its agent
     const w = world({
       pr: true,
       turnTimeoutMinutes: 0.02,
+      turnIdleMinutes: 0.02,
       developer: "gh fake-record 40 handoff\nexit 0\n",
       tester: sleepingTester(),
     });
@@ -58,7 +59,7 @@ describe("AC-1: a turn that exceeds the time limit ends in blocked and its agent
     expect(running.turn_started_at).toBe(dispatchedAt);
     expect(running.turn_deadline).toBe(new Date(Date.parse(dispatchedAt as string) + 0.02 * 60_000).toISOString());
 
-    const reason = "tester turn exceeded 0.02 minutes";
+    const reason = "tester turn inactive for 0.02 minutes after the 0.02-minute limit";
     await waitFor("the timeout block", () => stateOf(w).reason === reason);
     const state = stateOf(w);
     expect(state.status).toBe("blocked");
@@ -86,6 +87,7 @@ describe("AC-1: a GitHub failure does not postpone the timeout", { timeout: 30_0
     const w = world({
       pr: true,
       turnTimeoutMinutes: 0.02,
+      turnIdleMinutes: 0.02,
       developer: "gh fake-record 40 handoff\nexit 0\n",
       tester: sleepingTester(),
     });
@@ -98,7 +100,7 @@ describe("AC-1: a GitHub failure does not postpone the timeout", { timeout: 30_0
     writeFileSync(join(w.bin, "gh"), "#!/bin/sh\nexit 1\n");
     chmodSync(join(w.bin, "gh"), 0o755);
 
-    const reason = "tester turn exceeded 0.02 minutes";
+    const reason = "tester turn inactive for 0.02 minutes after the 0.02-minute limit";
     await waitFor("the timeout block despite the gh failure", () => stateOf(w).reason === reason);
     expect(stateOf(w).status).toBe("blocked");
     await waitFor("the tester agent to stop", () => !alive(agentPid));
@@ -113,6 +115,7 @@ describe("AC-1: a restarted supervisor blocks an overdue in-flight turn", { time
     const w = world({
       pr: true,
       turnTimeoutMinutes: 0.02,
+      turnIdleMinutes: 0.02,
       developer: "gh fake-record 40 handoff\nexit 0\n",
       tester: sleepingTester(),
     });
@@ -130,7 +133,7 @@ describe("AC-1: a restarted supervisor blocks an overdue in-flight turn", { time
     slowGh(w);
     expect(gdtWorld(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
 
-    const reason = "tester turn exceeded 0.02 minutes";
+    const reason = "tester turn inactive for 0.02 minutes after the 0.02-minute limit";
     await waitFor("the timeout block after the restart", () => stateOf(w).reason === reason);
     const state = stateOf(w);
     expect(state.status).toBe("blocked");
@@ -163,7 +166,7 @@ describe("AC-2: a turn that finishes before the deadline is unaffected", { timeo
     const log = supervisorLog(w);
     expect(log).toContain("dispatched developer");
     expect(log).toContain("dispatched tester");
-    expect(log).not.toContain("exceeded");
+    expect(log).not.toContain("inactive for");
   });
 });
 
@@ -172,6 +175,7 @@ describe("AC-3: gdt retry recovers a timed-out turn without orphaned processes",
     const w = world({
       pr: true,
       turnTimeoutMinutes: 0.02,
+      turnIdleMinutes: 0.02,
       developer: "gh fake-record 40 handoff\nexit 0\n",
       tester: sleepingTester(),
     });
@@ -180,7 +184,7 @@ describe("AC-3: gdt retry recovers a timed-out turn without orphaned processes",
     await waitFor("the tester turn", () => stateOf(w).status === "running" && stateOf(w).role === "tester");
     const workerPid = stateOf(w).pids.workers.tester;
     const agentPid = await waitForRunningTester(w);
-    await waitFor("the timeout block", () => stateOf(w).status === "blocked" && stateOf(w).reason.includes("exceeded"));
+    await waitFor("the timeout block", () => stateOf(w).status === "blocked" && stateOf(w).reason.includes("inactive for"));
     const key = stateOf(w).inflight?.key;
 
     expect(gdtWorld(w, "retry", "12")).toMatchObject({ code: 0, stdout: "Retry prepared for #12. Next: gdt start 12\n" });

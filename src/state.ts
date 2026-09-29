@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import type { ActivityBaseline } from "./activity.js";
 import type { Agent, Role } from "./config.js";
 import type { InvalidRecord } from "./protocol.js";
 
@@ -42,8 +43,20 @@ export interface Inflight {
   missing: boolean;
   /** AC-1: the blocked reason of that handoff, so a restart reports it again. */
   missing_reason?: string;
-  /** AC-1: set once the turn passed its deadline; the block stays until a retry, a late result is ignored. */
+  /** Set once the turn was stopped for inactivity; the block stays until a retry, a late result is ignored. */
   timed_out?: boolean;
+  /** The blocked reason of a turn stopped for inactivity or whose agent exited, so a restart reports it again. */
+  stop_reason?: string;
+  /** The turn's last activity; `dispatched_at` until a signal fires. Kept across supervisor restarts. */
+  last_activity?: string;
+  /** The turn's hard limit when `gdt extend` moved it; otherwise `dispatched_at + turn_max_minutes`. */
+  hard_limit?: string;
+  /** Set while the turn is blocked at its hard limit and still running; `gdt extend` clears it. */
+  at_hard_limit?: boolean;
+  /** The previous activity sample, compared with on the next poll. */
+  activity?: ActivityBaseline;
+  /** Consecutive polls that found neither the worker nor the agent process group alive. */
+  exited_polls?: number;
   /** Set when the turn broke a role boundary; the key stays blocked until a retry. */
   violation?: string;
 }
@@ -87,6 +100,8 @@ export interface Paths {
   pause: string;
   /** Holds the pid of a running `gdt stop` or `gdt retry`; its stop window is not a dead supervisor. */
   stopping: string;
+  /** A hard limit granted by `gdt extend` that the supervisor has not applied yet. */
+  extend: string;
   /** Per-issue agent/model overrides written by `gdt set-agent`, kept out of `state.json`. */
   overrides: string;
   logs: string;
@@ -98,6 +113,8 @@ export interface Paths {
   started: (key: string) => string;
   result: (key: string) => string;
   prompt: (key: string) => string;
+  /** Holds the agent process group id of the turn, written by its worker. */
+  agent: (key: string) => string;
 }
 
 /** The repository's common Git directory, so worktrees share one state. */
@@ -116,6 +133,7 @@ export function paths(root: string, issue: number, env: Env): Paths {
     lock: join(dir, "supervisor.lock"),
     pause: join(dir, "paused"),
     stopping: join(dir, "stopping"),
+    extend: join(dir, "extend.json"),
     overrides: join(dir, "overrides.json"),
     logs: join(dir, "logs"),
     panes: join(dir, "panes.json"),
@@ -124,6 +142,7 @@ export function paths(root: string, issue: number, env: Env): Paths {
     started: (key) => join(dir, "runs", `${key}.started`),
     result: (key) => join(dir, "runs", `${key}.result.json`),
     prompt: (key) => join(dir, "runs", `${key}.prompt.md`),
+    agent: (key) => join(dir, "runs", `${key}.agent`),
   };
 }
 
