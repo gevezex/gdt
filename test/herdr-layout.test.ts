@@ -55,6 +55,8 @@ describe("AC-1: the agents overview shows the role label", { timeout: 30_000 }, 
     expect(herdrCalls(w)).toContainEqual(["pane", "report-agent", "--source", "gdt", "--agent", "codex", "--state", "idle", ids.tester]);
   });
 
+  // #68 AC-3: the supervisor labels the effective agent, so `gdt set-agent` may run before or after it
+  // sets the tester label and the label still ends as `tester · opencode`.
   it("updates the label after gdt set-agent changes the role's agent", async () => {
     const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
     expect(gdt(w, "start", "12").code).toBe(0);
@@ -64,6 +66,53 @@ describe("AC-1: the agents overview shows the role label", { timeout: 30_000 }, 
     expect(gdt(w, "set-agent", "12", "tester", "opencode/some-model").code).toBe(0);
     await waitFor("the new tester label", () => herdrDisplayAgent(w, "tester") === "tester · opencode");
     expect(herdrCalls(w)).toContainEqual(["pane", "report-metadata", tester, "--source", "gdt", "--display-agent", "tester · opencode"]);
+  });
+});
+
+/** The role labels written since `from`, as [pane id, label] pairs. */
+function displayCalls(w: ReturnType<typeof world>, from = 0): [string, string][] {
+  return herdrCalls(w)
+    .slice(from)
+    .filter((args) => args[0] === "pane" && args[1] === "report-metadata")
+    .map((args) => [args[2] ?? "", args[args.indexOf("--display-agent") + 1] ?? ""]);
+}
+
+/** Resolves once the supervisor has set every role label after call `from`; the reviewer is labelled last. */
+async function allRoleLabels(w: ReturnType<typeof world>, from = 0): Promise<void> {
+  await waitFor("every role label", () => displayCalls(w, from).some(([, label]) => label.startsWith("reviewer · ")));
+}
+
+describe("#68 AC-1: the supervisor writes the effective agent in each role label", { timeout: 30_000 }, () => {
+  it("labels the overridden role with its override agent after a restart", async () => {
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await allRoleLabels(w);
+    expect(gdt(w, "set-agent", "12", "tester", "opencode/some-model").code).toBe(0);
+    expect(gdt(w, "stop", "12").code).toBe(0);
+
+    const from = herdrCalls(w).length;
+    expect(gdt(w, "start", "12").code).toBe(0);
+    await allRoleLabels(w, from);
+
+    const ids = herdrPaneIds(w);
+    const labels = displayCalls(w, from);
+    expect(labels).toContainEqual([ids.tester, "tester · opencode"]);
+    expect(labels).not.toContainEqual([ids.tester, "tester · fake"]);
+    expect(labels).toContainEqual([ids.developer, "developer · fake"]);
+    expect(herdrDisplayAgent(w, "tester")).toBe("tester · opencode");
+    expect(herdrDisplayAgent(w, "developer")).toBe("developer · fake");
+  });
+});
+
+describe("#68 AC-2: a set-agent during supervisor startup is not overwritten", { timeout: 30_000 }, () => {
+  it("ends with the new tester label when set-agent follows gdt start at once", async () => {
+    const w = world({ terminal: "herdr", supervisorPane: true, developer: "/bin/sleep 60\n" });
+    expect(gdt(w, "start", "12").code).toBe(0);
+    expect(gdt(w, "set-agent", "12", "tester", "opencode/some-model").code).toBe(0);
+    await allRoleLabels(w);
+
+    expect(herdrDisplayAgent(w, "tester")).toBe("tester · opencode");
+    expect(herdrDisplayAgent(w, "developer")).toBe("developer · fake");
   });
 });
 
