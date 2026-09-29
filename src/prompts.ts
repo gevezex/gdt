@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { Role } from "./config.js";
 import { loadLocale, SECTION_KEYS } from "./locale.js";
-import { type Kind, marker, type ProtocolRecord, schemas } from "./protocol.js";
+import { type InvalidRecord, type Kind, marker, type ProtocolRecord, schemas } from "./protocol.js";
 
 /** A human directive for one role, as passed in a dispatch. */
 export interface Directive {
@@ -22,6 +22,8 @@ export interface PromptDispatch {
   acceptance_criteria: string[];
   language: string;
   directives: Directive[];
+  /** AC-2: the previous rejected record of this role, so the retried turn can fix it. */
+  invalid_record?: InvalidRecord;
 }
 
 export interface Project {
@@ -77,6 +79,17 @@ export function pendingDirectives(
     .map((r) => ({ comment_id: r.comment_id, directive: r.data.directive }));
 }
 
+/**
+ * The record schema as embedded in a prompt. `z.toJSONSchema` starts with a `"$schema"` key and
+ * agents copy it into their record, where the strict schema rejects it; the key is dropped from the
+ * prompt (AC-3).
+ */
+function recordSchema(kind: Kind): string {
+  const schema = { ...(z.toJSONSchema(schemas[kind]) as Record<string, unknown>) };
+  delete schema["$schema"];
+  return JSON.stringify(schema, null, 2);
+}
+
 function schemaSection(kind: Kind): string {
   return [
     `## Protocol: ${marker(kind)}`,
@@ -84,8 +97,10 @@ function schemaSection(kind: Kind): string {
     `Close the record with ${marker(kind, true)}. The JSON object must match this JSON Schema:`,
     "",
     "```json",
-    JSON.stringify(z.toJSONSchema(schemas[kind]), null, 2),
+    recordSchema(kind),
     "```",
+    "",
+    `The record must not contain a \`"$schema"\` key.`,
   ].join("\n");
 }
 
@@ -124,6 +139,19 @@ export function buildPrompt(role: Role, dispatch: PromptDispatch, project: Proje
       `"None" marker: ${locale.markers.none}`,
     ].join("\n"),
   );
+
+  // AC-2: the retried turn is told which record was rejected and why, so it can post a fixed one.
+  if (dispatch.invalid_record !== undefined) {
+    const rejected = dispatch.invalid_record;
+    parts.push(
+      [
+        `## Invalid record in comment ${rejected.comment_id}`,
+        "",
+        `Your previous ${marker(rejected.kind)} record in comment ${rejected.comment_id} was rejected: ${rejected.reason}`,
+        `Post a new, complete record ${marker(rejected.kind)} that matches the schema exactly.`,
+      ].join("\n"),
+    );
+  }
 
   parts.push(schemaSection(RECORD_OF[role]), schemaSection("question"));
 

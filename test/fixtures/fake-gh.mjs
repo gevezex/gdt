@@ -1,9 +1,10 @@
 // A stand-in for `gh`, backed by one JSON file. Usage: node fake-gh.mjs <github.json> <gh args...>
 //
 // Test-only extra command, for fake agents:
-//   gh fake-record <issue-or-pr> <handoff|question> [--hidden-reads <n>]
+//   gh fake-record <issue-or-pr> <handoff|test|review|question> [--hidden-reads <n>] [--extra-schema]
 // posts a record built from the GDT_* variables the worker sets. A comment with hidden reads stays
-// invisible for that many reads of its thread, to model GitHub's delayed visibility.
+// invisible for that many reads of its thread, to model GitHub's delayed visibility. `--extra-schema`
+// adds a `"$schema"` key, which the strict record schemas reject (issue #60).
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import process from "node:process";
 
@@ -150,6 +151,7 @@ try {
   if (a === "fake-record") {
     const kind = args[2];
     const json = record(kind, process.env, data);
+    if (args.includes("--extra-schema")) json.$schema = "https://json-schema.org/draft/2020-12/schema";
     const marker = kind;
     const thread = (data.comments[b] ??= []);
     data.next_id = (data.next_id ?? 1000) + 1;
