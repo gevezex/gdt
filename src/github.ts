@@ -115,7 +115,8 @@ export function closesIssue(body: string, issue: number): boolean {
 /**
  * The issue body and the workflow's pull requests: the open pull requests GitHub links as closing the
  * issue, or, when there are none, the open pull requests whose body closes the issue without GitHub
- * having linked them (`unlinked` is then true). The fallback costs one `gh pr list` call.
+ * having linked them (`unlinked` is then true). The fallback costs one `gh api --paginate` call that
+ * reads every open pull request, so an older pull request is never cut off by a list limit.
  */
 export function issueSnapshot(issue: number, cwd: string, env: Env): { body: string; pullRequests: number[]; unlinked: boolean } {
   const data = ghJson<{ body: string; closedByPullRequestsReferences?: { number: number }[] }>(
@@ -125,12 +126,13 @@ export function issueSnapshot(issue: number, cwd: string, env: Env): { body: str
   );
   const linked = (data.closedByPullRequestsReferences ?? []).map((pr) => pr.number);
   if (linked.length > 0) return { body: data.body, pullRequests: linked, unlinked: false };
-  const open = ghJson<{ number: number; body: string | null }[]>(
-    ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,body"],
+  const pages = ghJson<{ number: number; body: string | null }[][]>(
+    ["api", "--paginate", "--slurp", "repos/{owner}/{repo}/pulls?state=open&per_page=100"],
     cwd,
     env,
   );
-  const unlinked = open
+  const unlinked = pages
+    .flat()
     .filter((pr) => closesIssue(pr.body ?? "", issue))
     .map((pr) => pr.number)
     .sort((x, y) => x - y);

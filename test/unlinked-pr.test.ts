@@ -24,6 +24,11 @@ async function pulls(w: World, list: Record<string, { body: string; state?: stri
   });
 }
 
+/** True for the fallback's call that lists the repository's open pull requests. */
+function listsPulls(call: string): boolean {
+  return call.startsWith("api --paginate --slurp repos/{owner}/{repo}/pulls?");
+}
+
 function count(text: string, line: string): number {
   return text.split("\n").filter((l) => l.endsWith(line)).length;
 }
@@ -39,6 +44,22 @@ describe("AC-1: an unlinked pull request is used when nothing is linked", { time
     expect(out).toMatchObject({ status: "running", role: "tester", pr_number: 40 });
     expect(supervisorLog(w)).not.toContain("finished without a visible handoff");
   });
+
+  it("finds an unlinked pull request older than the first page of open pull requests", async () => {
+    const w = world({ developer: HANDOFF, handoffChecks: 2 });
+    // 150 newer open pull requests fill the first page of 100; pull request 40 is on the second.
+    const list: Record<string, { body: string }> = { "40": { body: "Closes #12" } };
+    for (let n = 100; n < 250; n += 1) list[String(n)] = { body: `Closes #${n}` };
+    await pulls(w, list);
+    expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+
+    await waitFor("the tester turn", () => stateOf(w).role === "tester" && stateOf(w).status === "running", 20_000);
+    expect(statusJson(w)).toMatchObject({ status: "running", role: "tester", pr_number: 40 });
+    // Non-functional: still one call per poll, however many pages it reads.
+    const calls = github(w).calls ?? [];
+    const issueViews = calls.filter((c) => c.startsWith("issue view")).length;
+    expect(calls.filter(listsPulls).length).toBeLessThanOrEqual(issueViews);
+  });
 });
 
 describe("AC-2: the fallback is logged once per pull request", { timeout: 30_000 }, () => {
@@ -48,8 +69,8 @@ describe("AC-2: the fallback is logged once per pull request", { timeout: 30_000
     expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
 
     await waitFor("the tester turn", () => stateOf(w).role === "tester", 20_000);
-    const polls = (github(w).calls ?? []).filter((c) => c.startsWith("pr list")).length;
-    await waitFor("5 more polls", () => (github(w).calls ?? []).filter((c) => c.startsWith("pr list")).length >= polls + 5, 10_000);
+    const polls = (github(w).calls ?? []).filter((c) => listsPulls(c)).length;
+    await waitFor("5 more polls", () => (github(w).calls ?? []).filter((c) => listsPulls(c)).length >= polls + 5, 10_000);
     expect(count(supervisorLog(w), FALLBACK)).toBe(1);
   });
 });
@@ -64,7 +85,7 @@ describe("AC-3: a linked pull request wins over an unlinked one", { timeout: 30_
     expect(statusJson(w).pr_number).toBe(40);
     expect(supervisorLog(w)).not.toContain("has not linked it");
     // Non-functional: with a linked pull request the fallback costs no extra call.
-    expect((github(w).calls ?? []).some((c) => c.startsWith("pr list"))).toBe(false);
+    expect((github(w).calls ?? []).some((c) => listsPulls(c))).toBe(false);
   });
 });
 

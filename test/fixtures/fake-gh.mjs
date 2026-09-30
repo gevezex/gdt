@@ -132,10 +132,19 @@ try {
     thread.push({ id: data.next_id, author: data.login, created_at: new Date().toISOString(), body });
     return;
   }
-  if (a === "pr" && b === "list") {
-    // Open pull requests only, as `gh pr list --state open` returns them; `state` defaults to OPEN.
-    const open = Object.entries(data.pulls ?? {}).filter(([, pr]) => (pr.state ?? "OPEN") === "OPEN");
-    return out(open.map(([number, pr]) => ({ number: Number(number), body: pr.body ?? "" })));
+  if (a === "api" && args.some((arg) => /^repos\/.+\/pulls\?/.test(arg))) {
+    // Open pull requests only, newest first and split into pages of `per_page` as the REST API
+    // returns them; `--paginate` fetches every page and `--slurp` wraps them in one array.
+    const query = new globalThis.URLSearchParams(args.find((arg) => arg.includes("/pulls?")).split("?")[1]);
+    const open = Object.entries(data.pulls ?? {})
+      .filter(([, pr]) => (pr.state ?? "OPEN") === "OPEN")
+      .map(([number, pr]) => ({ number: Number(number), body: pr.body ?? "" }))
+      .sort((x, y) => y.number - x.number);
+    const size = Number(query.get("per_page") ?? 30);
+    const pages = [];
+    for (let i = 0; i < open.length; i += size) pages.push(open.slice(i, i + size));
+    if (!args.includes("--paginate")) return out(pages[0] ?? []);
+    return out(args.includes("--slurp") ? pages : pages.flat());
   }
   if (a === "pr" && b === "view") {
     const pr = data.pulls[args[2]];
