@@ -107,14 +107,34 @@ export function detectedChecks(cwd: string, env: Env): string[] {
   }
 }
 
-/** The issue body and the open pull requests that close the issue ("Closes #n"). */
-export function issueSnapshot(issue: number, cwd: string, env: Env): { body: string; pullRequests: number[] } {
+/** True when `body` contains a closing keyword ("Closes #n", "fixes #n", ...) for exactly issue `issue`. */
+export function closesIssue(body: string, issue: number): boolean {
+  return new RegExp(`(?<![\\w])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${issue}(?!\\d)`, "i").test(body);
+}
+
+/**
+ * The issue body and the workflow's pull requests: the open pull requests GitHub links as closing the
+ * issue, or, when there are none, the open pull requests whose body closes the issue without GitHub
+ * having linked them (`unlinked` is then true). The fallback costs one `gh pr list` call.
+ */
+export function issueSnapshot(issue: number, cwd: string, env: Env): { body: string; pullRequests: number[]; unlinked: boolean } {
   const data = ghJson<{ body: string; closedByPullRequestsReferences?: { number: number }[] }>(
     ["issue", "view", String(issue), "--json", "body,closedByPullRequestsReferences"],
     cwd,
     env,
   );
-  return { body: data.body, pullRequests: (data.closedByPullRequestsReferences ?? []).map((pr) => pr.number) };
+  const linked = (data.closedByPullRequestsReferences ?? []).map((pr) => pr.number);
+  if (linked.length > 0) return { body: data.body, pullRequests: linked, unlinked: false };
+  const open = ghJson<{ number: number; body: string | null }[]>(
+    ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,body"],
+    cwd,
+    env,
+  );
+  const unlinked = open
+    .filter((pr) => closesIssue(pr.body ?? "", issue))
+    .map((pr) => pr.number)
+    .sort((x, y) => x - y);
+  return { body: data.body, pullRequests: unlinked, unlinked: unlinked.length > 0 };
 }
 
 /** All comments on an issue or pull request conversation, oldest first. */

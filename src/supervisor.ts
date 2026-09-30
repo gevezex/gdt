@@ -206,6 +206,8 @@ function log(line: string): void {
 class Supervisor {
   private trusted: string[] = [];
   private reportWarned = false;
+  /** Unlinked pull requests already logged, so the fallback line appears once per pull request. */
+  private readonly unlinkedLogged = new Set<number>();
   private readonly agents: Record<Role, string>;
 
   constructor(
@@ -508,7 +510,7 @@ class Supervisor {
     // The turn check runs before any GitHub fetch, so a failing `gh` call cannot postpone it and
     // leave a hung turn `running` forever.
     if (this.settleTurn(now) !== null) return "continue";
-    const { body, pullRequests } = issueSnapshot(this.issue, this.p.root, this.env);
+    const { body, pullRequests, unlinked } = issueSnapshot(this.issue, this.p.root, this.env);
     const bodySha = sha256(body);
     const changelog = sectionText(body, this.locale.sections.changelog) ?? "";
 
@@ -580,6 +582,10 @@ class Supervisor {
       return "continue";
     }
     const prNumber = pullRequests[0];
+    if (unlinked && prNumber !== undefined && !this.unlinkedLogged.has(prNumber)) {
+      this.unlinkedLogged.add(prNumber);
+      log(`pull request #${prNumber} closes #${this.issue} in its body but GitHub has not linked it; using it`);
+    }
     const pr: PullRequestSnapshot | null = prNumber === undefined ? null : pullRequest(prNumber, this.p.root, this.env);
     if (pr !== null) {
       if (this.state.head !== null && this.state.head !== pr.head) {

@@ -132,6 +132,11 @@ try {
     thread.push({ id: data.next_id, author: data.login, created_at: new Date().toISOString(), body });
     return;
   }
+  if (a === "pr" && b === "list") {
+    // Open pull requests only, as `gh pr list --state open` returns them; `state` defaults to OPEN.
+    const open = Object.entries(data.pulls ?? {}).filter(([, pr]) => (pr.state ?? "OPEN") === "OPEN");
+    return out(open.map(([number, pr]) => ({ number: Number(number), body: pr.body ?? "" })));
+  }
   if (a === "pr" && b === "view") {
     const pr = data.pulls[args[2]];
     if (pr === undefined) fail(`no pull requests found for ${args[2]}`);

@@ -236,7 +236,7 @@ export interface FakeComment {
 export interface GithubData {
   issues: Record<string, { body: string; closed_by?: number[] }>;
   comments: Record<string, FakeComment[]>;
-  pulls?: Record<string, { head: string; mergeable?: string; checks?: unknown[] }>;
+  pulls?: Record<string, { head: string; mergeable?: string; checks?: unknown[]; body?: string; state?: string }>;
   next_id?: number;
 }
 
