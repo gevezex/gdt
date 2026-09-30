@@ -3,7 +3,17 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type ActivitySample, formatSignals, groupUsage, nextBaseline, opencodeDatabase, sample, type Signals, signals } from "./activity.js";
+import {
+  type ActivitySample,
+  formatSignals,
+  groupUsage,
+  nextBaseline,
+  opencodeDatabase,
+  opencodeMtime,
+  sample,
+  type Signals,
+  signals,
+} from "./activity.js";
 import type { AgentState } from "./backends/backend.js";
 import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, type ResolvedConfig, type Role, ROLES } from "./config.js";
@@ -100,6 +110,11 @@ export function hardLimitReason(role: Role, minutes: number): string {
   return `${role} turn still active after ${minutes} minutes`;
 }
 
+/** #71 AC-4: the blocked reason of a turn whose agent exited and stayed active until its hard limit. */
+export function exitedActiveReason(role: Role, minutes: number): string {
+  return `${role} exited without a visible handoff and stayed active until the ${minutes}-minute hard limit`;
+}
+
 /** AC-6: the blocked reason of a turn whose agent and worker are gone without a result. */
 export function exitedReason(role: Role): string {
   return `${role} agent exited without a result`;
@@ -118,6 +133,11 @@ export function turnLastActivity(inflight: Inflight): string {
 /** AC-8: the turn's hard limit: `dispatched_at + turn_max_minutes` until `gdt extend` moves it. */
 export function turnHardLimit(inflight: Inflight, maxMinutes: number): Date {
   return inflight.hard_limit === undefined ? turnDeadline(inflight.dispatched_at, maxMinutes) : new Date(inflight.hard_limit);
+}
+
+/** The turn's hard limit in minutes after dispatch, rounded to two decimals for a reason text. */
+function hardLimitMinutes(inflight: Inflight, hardLimit: Date): number {
+  return Math.round(((hardLimit.getTime() - Date.parse(inflight.dispatched_at)) / 60_000) * 100) / 100;
 }
 
 /** AC-2/AC-6: true when a blocked reason is a stopped or exited turn, so `gdt retry` can lift it. */
@@ -311,17 +331,35 @@ class Supervisor {
     }
   }
 
+  /** The opencode session database when the role's agent is opencode, otherwise null. */
+  private opencodeDb(role: Role): string | null {
+    if (this.effectiveAgent(role) !== "opencode") return null;
+    const home = this.env.HOME === undefined || this.env.HOME === "" ? homedir() : this.env.HOME;
+    return opencodeDatabase(this.env, home);
+  }
+
   /** The activity sample of an in-flight turn (issue Definitions). */
   private sampleTurn(running: Inflight, pgid: number | null): ActivitySample {
-    const agent = this.effectiveAgent(running.role);
-    const home = this.env.HOME === undefined || this.env.HOME === "" ? homedir() : this.env.HOME;
     return sample({
       root: this.p.root,
       env: this.env,
       pgid,
       logFile: this.config.workflow.terminal === "headless" ? join(this.p.logs, `${running.role}.log`) : null,
-      opencodeDb: agent === "opencode" ? opencodeDatabase(this.env, home) : null,
+      opencodeDb: this.opencodeDb(running.role),
     });
+  }
+
+  /**
+   * #71 post-exit activity: true when the opencode database changed since the previous handoff check,
+   * or since the agent exited on the first check. Never fires for other agents.
+   */
+  private postExitActivity(inflight: Inflight, finishedAt: string | undefined): boolean {
+    const database = this.opencodeDb(inflight.role);
+    if (database === null) return false;
+    const current = opencodeMtime(database);
+    const previous = inflight.handoff_opencode ?? (finishedAt === undefined ? undefined : Date.parse(finishedAt));
+    if (current !== null) inflight.handoff_opencode = current;
+    return current !== null && previous !== undefined && current > previous;
   }
 
   /**
@@ -401,7 +439,7 @@ class Supervisor {
     log(`activity check for ${running.key}: ${formatSignals(fired)}; last activity ${lastActivity}`);
     const context = { role: running.role, round: running.round };
     const hardLimit = turnHardLimit(running, workflow.turn_max_minutes);
-    const hardMinutes = Math.round(((hardLimit.getTime() - Date.parse(running.dispatched_at)) / 60_000) * 100) / 100;
+    const hardMinutes = hardLimitMinutes(running, hardLimit);
     if (running.at_hard_limit === true) {
       // AC-4: the turn keeps running until `gdt extend`, `gdt retry` or its result.
       this.setStatus("blocked", hardLimitReason(running.role, hardMinutes), context);
@@ -494,43 +532,42 @@ class Supervisor {
 
     // A turn in flight: nothing to fetch until its worker has reported.
     const running = this.state.inflight;
+    let finishedAt: string | undefined;
     if (running !== null) {
       if (running.violation !== undefined) {
         this.setRoleState(running.role, "FAILED");
         this.setStatus("blocked", running.violation, { role: running.role, round: running.round });
         return "continue";
       }
-      if (running.missing) {
-        // Also restores the status after a stop and start. AC-1: an invalid record keeps its reason.
-        const reason = running.missing_reason ?? `${running.role} finished without a visible handoff`;
-        this.setStatus("blocked", reason, { role: running.role, round: running.round });
-        return "continue";
+      // #71 AC-5: a turn blocked on a missing handoff goes on to the fetch, so a late record lifts the block.
+      if (!running.missing) {
+        // A turn past its deadline was already settled at the top of this tick, before the GitHub
+        // fetch. A result-less turn that reaches this point is still before its deadline.
+        const result = readJson<TurnResult>(this.p.result(running.key));
+        if (result === null) {
+          this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });
+          return "continue";
+        }
+        if (result.violation !== undefined) {
+          // A broken role boundary outranks the exit code: the checkout can no longer be trusted.
+          running.violation = result.violation;
+          this.setRoleState(running.role, "FAILED");
+          this.setStatus("blocked", result.violation, { role: running.role, round: running.round, exit_code: result.exit_code });
+          return "continue";
+        }
+        if (result.exit_code !== 0) {
+          const reason =
+            result.exit_code === null
+              ? `${running.role} turn was interrupted`
+              : `${running.role} turn failed (exit code ${result.exit_code})`;
+          this.setRoleState(running.role, "FAILED");
+          this.setStatus("failed", reason, { role: running.role, round: running.round, exit_code: result.exit_code });
+          return "exit";
+        }
+        // AC-5: the turn finished successfully.
+        finishedAt = result.finished_at;
+        this.setRoleState(running.role, "DONE");
       }
-      // A turn past its deadline was already settled at the top of this tick, before the GitHub
-      // fetch. A result-less turn that reaches this point is still before its deadline.
-      const result = readJson<TurnResult>(this.p.result(running.key));
-      if (result === null) {
-        this.setStatus("running", `${running.role} turn in progress`, { role: running.role, round: running.round });
-        return "continue";
-      }
-      if (result.violation !== undefined) {
-        // A broken role boundary outranks the exit code: the checkout can no longer be trusted.
-        running.violation = result.violation;
-        this.setRoleState(running.role, "FAILED");
-        this.setStatus("blocked", result.violation, { role: running.role, round: running.round, exit_code: result.exit_code });
-        return "continue";
-      }
-      if (result.exit_code !== 0) {
-        const reason =
-          result.exit_code === null
-            ? `${running.role} turn was interrupted`
-            : `${running.role} turn failed (exit code ${result.exit_code})`;
-        this.setRoleState(running.role, "FAILED");
-        this.setStatus("failed", reason, { role: running.role, round: running.round, exit_code: result.exit_code });
-        return "exit";
-      }
-      // AC-5: the turn finished successfully.
-      this.setRoleState(running.role, "DONE");
     }
 
     if (pullRequests.length > 1) {
@@ -556,33 +593,49 @@ class Supervisor {
     const inflight = this.state.inflight;
     if (inflight !== null) {
       const visible = trusted.some((r) => roleOf(r) === inflight.role && r.comment_id > inflight.after_comment_id);
+      const context = { role: inflight.role, round: inflight.round };
+      if (!visible && inflight.missing) {
+        // Also restores the status after a stop and start. AC-1: an invalid record keeps its reason.
+        this.setStatus("blocked", inflight.missing_reason ?? `${inflight.role} finished without a visible handoff`, context);
+        return "continue";
+      }
       if (!visible) {
-        inflight.checks += 1;
         // AC-1: an invalid record is named with its validation error instead of `not visible`;
         // AC-4: without any role record the message and log line stay as before.
         const invalid = invalidRecordFor(inflight, diagnostics, this.trusted);
-        log(
-          `handoff check ${inflight.checks}/${this.config.workflow.handoff_checks} for ${inflight.key}: ` +
-            (invalid === undefined ? "not visible" : invalid.reason),
-        );
+        const seen = invalid === undefined ? "not visible" : invalid.reason;
+        const retryRecord = (extra: Partial<State>): Partial<State> =>
+          // AC-2: `gdt retry` keeps this record; the role's next turn reads it into its prompt.
+          invalid === undefined
+            ? extra
+            : { ...extra, retry_record: { role: inflight.role, kind: invalid.kind, comment_id: invalid.comment_id, reason: invalid.reason } };
+        // #71 AC-2: a check with post-exit activity is not a missed check.
+        if (this.postExitActivity(inflight, finishedAt)) {
+          log(`handoff check for ${inflight.key}: ${seen}, agent still active (opencode=yes)`);
+          const hardLimit = turnHardLimit(inflight, this.config.workflow.turn_max_minutes);
+          if (now.getTime() >= hardLimit.getTime()) {
+            // #71 AC-4: the hard limit bounds the wait, also when unrelated opencode use keeps it active.
+            inflight.missing = true;
+            inflight.missing_reason = exitedActiveReason(inflight.role, hardLimitMinutes(inflight, hardLimit));
+            this.setStatus("blocked", inflight.missing_reason, retryRecord(context));
+          } else {
+            this.setStatus("running", `waiting for the ${inflight.role} handoff; agent exited but is still active`, context);
+          }
+          return "continue";
+        }
+        inflight.checks += 1;
+        log(`handoff check ${inflight.checks}/${this.config.workflow.handoff_checks} for ${inflight.key}: ${seen}`);
         if (inflight.checks >= this.config.workflow.handoff_checks) {
           inflight.missing = true;
-          const reason =
-            invalid === undefined
-              ? `${inflight.role} finished without a visible handoff`
-              : invalidRecordReason(inflight.role, invalid);
-          inflight.missing_reason = reason;
-          const extra: Partial<State> = { role: inflight.role, round: inflight.round };
-          // AC-2: `gdt retry` keeps this record; the role's next turn reads it into its prompt.
-          if (invalid !== undefined) {
-            extra.retry_record = { role: inflight.role, kind: invalid.kind, comment_id: invalid.comment_id, reason: invalid.reason };
-          }
-          this.setStatus("blocked", reason, extra);
+          inflight.missing_reason = invalid === undefined ? `${inflight.role} finished without a visible handoff` : invalidRecordReason(inflight.role, invalid);
+          this.setStatus("blocked", inflight.missing_reason, retryRecord(context));
         } else {
-          this.setStatus("running", `waiting for the ${inflight.role} handoff to become visible`, { role: inflight.role, round: inflight.round });
+          this.setStatus("running", `waiting for the ${inflight.role} handoff to become visible`, context);
         }
         return "continue";
       }
+      // #71 AC-5: a late record lifts the block as if it had arrived in time.
+      if (inflight.missing) log(`late handoff for ${inflight.key} accepted`);
       this.state.inflight = null;
       // AC-2: the role's rejection explanation is spent once a valid record is visible.
       if (this.state.retry_record?.role === inflight.role) this.state.retry_record = null;

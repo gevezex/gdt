@@ -59,6 +59,8 @@ export interface Inflight {
   exited_polls?: number;
   /** Set when the turn broke a role boundary; the key stays blocked until a retry. */
   violation?: string;
+  /** #71: the opencode database mtime at the previous handoff check, to detect post-exit activity. */
+  handoff_opencode?: number;
 }
 
 /** `.git/gdt/issue-<n>/state.json`. Written only by the supervisor, or by the CLI when no supervisor runs. */
