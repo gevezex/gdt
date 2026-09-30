@@ -222,6 +222,8 @@ export function stop(issue: number, cwd: string, env: Env): CommandResult {
 
   // Re-read: the supervisor may have written state until it was stopped.
   const state = readState(p) ?? before;
+  // #71 Out of scope: a late record for a stopped turn is never accepted.
+  if (state.inflight !== null) state.inflight.stopped = true;
   // A failed turn keeps its status and reason; only the recovery step (gdt retry) clears it.
   if (state.status === "failed") Object.assign(state, { pids: { supervisor: null, workers: {} } });
   else Object.assign(state, { status: "stopped", reason: "", pids: { supervisor: null, workers: {} } });

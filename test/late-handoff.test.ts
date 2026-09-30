@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gdt, sleep, stateOf, stopWorlds, supervisorLog, waitFor, world, type World } from "./world.js";
+import { gdt, type GithubData, sleep, stateOf, stopWorlds, supervisorLog, waitFor, world, type World } from "./world.js";
 
 afterEach(stopWorlds);
 
@@ -161,5 +161,27 @@ describe("AC-5: a late record lifts the block", { timeout: 40_000 }, () => {
     expect(out.status).toBe("running");
     expect(out.role).toBe("reviewer");
     expect(supervisorLog(w)).toMatch(/late handoff for tester\.r\d+\.\S+ accepted/);
+  });
+});
+
+describe("AC-5: a late record lifts the block, but not after gdt stop (Out of scope)", { timeout: 40_000 }, () => {
+  it("keeps a turn stopped with gdt stop blocked when its record appears after gdt start", async () => {
+    const trigger = join(mkdtempSync(join(tmpdir(), "gdt-trigger-")), "post-record");
+    // The detached child posts the tester record once the test creates the trigger file, after gdt stop.
+    const tester = `( while [ ! -f "${trigger}" ]; do /bin/sleep 0.1; done; gh fake-record 40 test ) >/dev/null 2>&1 &\nexit 0\n`;
+    const w = world({ pr: true, developer: HANDOFF, tester, pollSeconds: 1, handoffChecks: 2 });
+    expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+
+    await waitFor("the block", () => stateOf(w).status === "blocked", 20_000);
+    expect(gdt(w, "stop", "12").code).toBe(0);
+    writeFileSync(trigger, "");
+    const posted = (): boolean =>
+      ((JSON.parse(readFileSync(w.github, "utf8")) as GithubData).comments["40"] ?? []).some((c) => c.body.startsWith("[gdt-test:v1]"));
+    await waitFor("the late record", posted, 5_000);
+    expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
+
+    await sleep(4_000);
+    expect(stateOf(w)).toMatchObject({ status: "blocked", role: "tester", reason: "tester finished without a visible handoff" });
+    expect(supervisorLog(w)).not.toMatch(/late handoff for/);
   });
 });

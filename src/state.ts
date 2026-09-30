@@ -61,6 +61,8 @@ export interface Inflight {
   violation?: string;
   /** #71: the opencode database mtime at the previous handoff check, to detect post-exit activity. */
   handoff_opencode?: number;
+  /** #71: set by `gdt stop`; such a turn gets no post-exit wait and no late record lifts its block. */
+  stopped?: boolean;
 }
 
 /** `.git/gdt/issue-<n>/state.json`. Written only by the supervisor, or by the CLI when no supervisor runs. */

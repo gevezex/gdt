@@ -351,10 +351,10 @@ class Supervisor {
 
   /**
    * #71 post-exit activity: true when the opencode database changed since the previous handoff check,
-   * or since the agent exited on the first check. Never fires for other agents.
+   * or since the agent exited on the first check. Never fires for other agents or a stopped turn.
    */
   private postExitActivity(inflight: Inflight, finishedAt: string | undefined): boolean {
-    const database = this.opencodeDb(inflight.role);
+    const database = inflight.stopped === true ? null : this.opencodeDb(inflight.role);
     if (database === null) return false;
     const current = opencodeMtime(database);
     const previous = inflight.handoff_opencode ?? (finishedAt === undefined ? undefined : Date.parse(finishedAt));
@@ -539,6 +539,11 @@ class Supervisor {
         this.setStatus("blocked", running.violation, { role: running.role, round: running.round });
         return "continue";
       }
+      if (running.missing && running.stopped === true) {
+        // #71 Out of scope: a stopped turn stays blocked until a retry, whatever record arrives later.
+        this.setStatus("blocked", running.missing_reason ?? `${running.role} finished without a visible handoff`, { role: running.role, round: running.round });
+        return "continue";
+      }
       // #71 AC-5: a turn blocked on a missing handoff goes on to the fetch, so a late record lifts the block.
       if (!running.missing) {
         // A turn past its deadline was already settled at the top of this tick, before the GitHub
@@ -595,7 +600,7 @@ class Supervisor {
       const visible = trusted.some((r) => roleOf(r) === inflight.role && r.comment_id > inflight.after_comment_id);
       const context = { role: inflight.role, round: inflight.round };
       if (!visible && inflight.missing) {
-        // Also restores the status after a stop and start. AC-1: an invalid record keeps its reason.
+        // AC-1: an invalid record keeps its reason.
         this.setStatus("blocked", inflight.missing_reason ?? `${inflight.role} finished without a visible handoff`, context);
         return "continue";
       }
