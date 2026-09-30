@@ -99,6 +99,8 @@ export interface Options {
   turnIdleMinutes?: number;
   /** `workflow.turn_max_minutes`; omitted when undefined, so the gdt default (120) applies. */
   turnMaxMinutes?: number;
+  /** `workflow.poll_seconds`; 0.1 when undefined. */
+  pollSeconds?: number;
   /** Extra environment for every gdt process of the world. */
   env?: Record<string, string>;
   extraFiles?: Record<string, string>;
@@ -112,6 +114,7 @@ export function config(
   turnTimeoutMinutes?: number,
   turnIdleMinutes?: number,
   turnMaxMinutes?: number,
+  pollSeconds = 0.1,
 ): string {
   return [
     'language = "en"',
@@ -120,7 +123,7 @@ export function config(
     `terminal = "${terminal}"`,
     ...(supervisorPane === undefined ? [] : [`supervisor_pane = ${supervisorPane}`]),
     ...(herdrLayout === undefined ? [] : [`herdr_layout = "${herdrLayout}"`]),
-    "poll_seconds = 0.1",
+    `poll_seconds = ${pollSeconds}`,
     `handoff_checks = ${handoffChecks}`,
     ...(turnTimeoutMinutes === undefined ? [] : [`turn_timeout_minutes = ${turnTimeoutMinutes}`]),
     ...(turnIdleMinutes === undefined ? [] : [`turn_idle_minutes = ${turnIdleMinutes}`]),
@@ -151,6 +154,7 @@ export function world(options: Options = {}): World {
       options.turnTimeoutMinutes,
       options.turnIdleMinutes,
       options.turnMaxMinutes,
+      options.pollSeconds,
     ),
     "scripts/developer.sh": options.developer ?? "exit 0\n",
     "scripts/tester.sh": options.tester ?? "/bin/sleep 60\n",
