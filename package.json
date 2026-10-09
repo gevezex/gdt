@@ -1,6 +1,6 @@
 {
   "name": "@gevezex/gdt",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "GitHub issues to merge-ready pull requests, with a developer, tester and reviewer agent.",
   "keywords": [
     "github",
