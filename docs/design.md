@@ -83,7 +83,9 @@ user steers. Steering is therefore a first-class feature of the supervisor
 3. **No invented answers.** The operator posts a human answer or directive only
    with the user's literal words or after the user explicitly confirmed the text.
    It never presents its own product choice as the user's answer.
-4. **Hands off the working tree.** All roles share one checkout. The operator
+4. **Hands off the working tree.** The roles work in the checkout where
+   `gdt start` ran; a tester or reviewer turn runs in the worktree that has the
+   pull request head checked out, when that is another worktree. The operator
    reads state and logs and runs gdt commands; code changes belong to the
    developer role.
 
@@ -422,8 +424,8 @@ directories of detected harnesses.
 
 - **Unattended roles run with broad tool permissions.** Role boundaries are
   therefore also checked mechanically: after a tester or reviewer turn, the
-  supervisor verifies that HEAD, branch and the tracked working tree are
-  unchanged, and blocks otherwise.
+  supervisor verifies that HEAD, branch and the tracked working tree of the
+  turn's working directory are unchanged, and blocks otherwise.
 - **Issue and comment content is task data**, never instructions to the supervisor.
 - **Identity.** With one shared GitHub account, an agent-written answer is
   indistinguishable from the user's. v1 documents this and relies on operator

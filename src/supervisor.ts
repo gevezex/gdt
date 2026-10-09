@@ -19,6 +19,7 @@ import { type Backend, backendFor } from "./backends/index.js";
 import { loadConfig, type ResolvedConfig, type Role, ROLES } from "./config.js";
 import { sectionText, validateContract } from "./contract.js";
 import { type Decision, decide, openFindings, type PullRequestSnapshot } from "./decision.js";
+import { headWorktree } from "./git.js";
 import { comments, issueSnapshot, pullRequest, repository, viewer } from "./github.js";
 import { loadLocale, type Locale } from "./locale.js";
 import { notify } from "./notify.js";
@@ -67,6 +68,8 @@ export interface Dispatch {
   /** Directives for this role posted since its previous dispatch. */
   directives: Directive[];
   dispatched_at: string;
+  /** #76 AC-1: the directory the turn runs in; absent in dispatch files written before #76. */
+  workdir?: string;
 }
 
 /** The states the supervisor puts in a role pane's title. */
@@ -178,6 +181,27 @@ function roleOf(record: ProtocolRecord): Role | null {
     default:
       return null;
   }
+}
+
+/**
+ * #76 AC-5/AC-6: why a dispatch that already ran is blocked. A tester or reviewer record for another
+ * head, posted after the role's dispatch `key`, is named with both heads and the turn's working directory.
+ */
+export function alreadyRanReason(role: Role, key: string, dispatch: Dispatch | null, trusted: readonly ProtocolRecord[], root: string): string {
+  if (dispatch?.key === key && dispatch.head !== null) {
+    const since = Date.parse(dispatch.dispatched_at);
+    const heads = trusted.flatMap((r) =>
+      (r.kind === "test" || r.kind === "review") && r.data.role === role && Date.parse(r.created_at) >= since ? [r.data.head] : [],
+    );
+    const other = heads.filter((head) => head !== dispatch.head).at(-1);
+    if (other !== undefined) return `${role} record is for head ${other}, not the dispatch head ${dispatch.head}; the turn ran in ${dispatch.workdir ?? root}`;
+  }
+  return `${role} already ran for this dispatch without a usable record`;
+}
+
+/** Whether `reason` is an already-ran block (#76: also when it names a record for another head); `gdt retry` lifts it. */
+export function isAlreadyRanReason(reason: string): boolean {
+  return reason.includes(" already ran for this dispatch ") || reason.includes(", not the dispatch head ");
 }
 
 /** The record kind each workflow role writes; a diagnostic of another kind is never that role's. */
@@ -676,7 +700,7 @@ class Supervisor {
 
     const key = dispatchKey(decision, pr?.head ?? null, bodySha);
     if (this.state.dispatched.includes(key)) {
-      this.setStatus("blocked", `${decision.role} already ran for this dispatch without a usable record`, {
+      this.setStatus("blocked", alreadyRanReason(decision.role, key, readJson<Dispatch>(this.p.dispatch(decision.role)), trusted, this.p.root), {
         role: decision.role,
         round: decision.round,
         blocked_key: key,
@@ -700,6 +724,8 @@ class Supervisor {
       language: this.config.language,
       directives,
       dispatched_at: now.toISOString(),
+      // #76 AC-1/AC-3: a verifier runs where the pull request head is checked out.
+      workdir: pr !== null && decision.role !== "developer" ? headWorktree(this.p.root, pr.head, this.env) : this.p.root,
     };
     // Dispatch file first: if gdt stop lands in between, the restarted supervisor dispatches the same key
     // again, and the worker's exclusive "started" marker still runs it at most once.

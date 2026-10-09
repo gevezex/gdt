@@ -486,7 +486,9 @@ to be told: it blocks until the workflow needs attention.
 
 The roles work in the checkout where you run `gdt start`: the developer checks
 out the feature branch there, and the tester and reviewer read that same working
-tree. `gdt start` needs a **clean working tree** and refuses to run otherwise
+tree. When the pull request head is checked out in another worktree (for example
+one the developer created) and not in that checkout, the tester and reviewer
+turns run in that worktree instead. `gdt start` needs a **clean working tree** and refuses to run otherwise
 ("Commit or stash before starting."), so commit or stash first. Do not edit that
 checkout while a workflow runs; if you want to keep working, use a separate
 clone for gdt.

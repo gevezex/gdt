@@ -22,6 +22,8 @@ export interface PromptDispatch {
   acceptance_criteria: string[];
   language: string;
   directives: Directive[];
+  /** #76 AC-4: the directory the turn runs in. */
+  workdir?: string;
   /** AC-2: the previous rejected record of this role, so the retried turn can fix it. */
   invalid_record?: InvalidRecord;
 }
@@ -118,6 +120,7 @@ export function buildPrompt(role: Role, dispatch: PromptDispatch, project: Proje
       `Round: ${dispatch.round}`,
       `Pull request: ${dispatch.pr_number === null ? "none yet" : `#${dispatch.pr_number}`}`,
       `Head: ${dispatch.head ?? "none yet"}`,
+      ...(dispatch.workdir === undefined ? [] : [`Working directory: ${dispatch.workdir}`]),
       `issue_body_sha256: ${dispatch.issue_body_sha256}`,
       `Acceptance criteria: ${dispatch.acceptance_criteria.join(", ")}`,
       `Language: ${locale.name}`,

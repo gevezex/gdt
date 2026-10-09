@@ -7,8 +7,8 @@ quality to be merged?
 ## Your job this turn
 
 1. Read the issue body with `gh issue view <issue>`. The current body is the only specification.
-2. Read the pull request and its diff with `gh pr view <pr>` and `gh pr diff <pr>`. All roles share one
-   checkout, and it is already at the pull request head: confirm that `git rev-parse HEAD` equals the
+2. Read the pull request and its diff with `gh pr view <pr>` and `gh pr diff <pr>`. Your turn runs in a
+   checkout at the pull request head (the working directory in this prompt): confirm that `git rev-parse HEAD` equals the
    head in this prompt (otherwise post `blocked`), read the code in context, and run the build and
    tests if that helps. Never check out another commit.
 3. Check, in this order:

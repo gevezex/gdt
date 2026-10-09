@@ -34,6 +34,7 @@ import {
   activeReason,
   cliPath,
   type Extension,
+  isAlreadyRanReason,
   isHardLimitReason,
   isTimeoutReason,
   turnDeadline,
@@ -241,7 +242,7 @@ function retryable(state: State): boolean {
   return (
     state.status === "blocked" &&
     (state.reason.includes("without a visible handoff") ||
-      state.reason.includes("already ran") ||
+      isAlreadyRanReason(state.reason) ||
       isTimeoutReason(state.reason) ||
       isHardLimitReason(state.reason) ||
       isInvalidRecordReason(state.reason))
@@ -287,7 +288,7 @@ function blockedHint(issue: number, reason: string): string {
   if (isHardLimitReason(reason)) return `gdt extend ${issue} or gdt retry ${issue}`;
   if (
     reason.includes("without a visible handoff") ||
-    reason.includes("already ran") ||
+    isAlreadyRanReason(reason) ||
     isTimeoutReason(reason) ||
     isInvalidRecordReason(reason)
   ) {
