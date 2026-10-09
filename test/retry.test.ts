@@ -5,7 +5,8 @@ import { gdt, stateOf, stopWorlds, waitFor, world } from "./world.js";
 
 afterEach(stopWorlds);
 
-const ALREADY_RAN = "tester already ran for this dispatch without a usable record";
+/** Since #76 an already-ran block for a record with another head names both heads. */
+const ALREADY_RAN = `tester record is for head ${"a".repeat(40)}, not the dispatch head ${"b".repeat(40)}`;
 
 /** A tester whose record names another head than the dispatched one, so its turn leaves no usable evidence. */
 function alreadyRanWorld() {
@@ -20,7 +21,7 @@ describe("AC-1: the supervisor remembers the key of an already-ran block", { tim
   it("names the dispatch key in blocked_key", async () => {
     const w = alreadyRanWorld();
     expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
-    await waitFor("the already-ran block", () => stateOf(w).reason === ALREADY_RAN);
+    await waitFor("the already-ran block", () => stateOf(w).reason.startsWith(ALREADY_RAN));
     const state = stateOf(w);
     expect(state.status).toBe("blocked");
     expect(state.blocked_key).toMatch(/^tester\.r0\./);
@@ -32,7 +33,7 @@ describe("AC-2: retry lifts an already-ran block", { timeout: 30_000 }, () => {
   it("clears the key and dispatches the same role again", async () => {
     const w = alreadyRanWorld();
     expect(gdt(w, "start", "12")).toMatchObject({ code: 0, stderr: "" });
-    await waitFor("the already-ran block", () => stateOf(w).reason === ALREADY_RAN);
+    await waitFor("the already-ran block", () => stateOf(w).reason.startsWith(ALREADY_RAN));
     const key = stateOf(w).blocked_key;
 
     expect(gdt(w, "retry", "12")).toMatchObject({ code: 0, stdout: "Retry prepared for #12. Next: gdt start 12\n" });

@@ -7,8 +7,8 @@ check behaviour yourself.
 ## Your job this turn
 
 1. Read the issue body with `gh issue view <issue>`. The current body is the only specification.
-2. All roles share one checkout, and it is already at the pull request head. Confirm that
-   `git rev-parse HEAD` equals the head in this prompt. If it does not, post `blocked` and say so;
+2. Your turn runs in a checkout at the pull request head: the working directory in this prompt.
+   Confirm that `git rev-parse HEAD` equals the head in this prompt. If it does not, post `blocked` and say so;
    never check out another commit.
 3. For every AC: turn Given, When, Then and Example into a concrete check. Run the project's tests,
    run the program, and try the example and its edge cases. Record what you did and what you saw.

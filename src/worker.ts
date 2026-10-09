@@ -33,14 +33,14 @@ export function waitingLine(role: Role, last: LastTurn | undefined): string {
 }
 
 /** The command for one unattended turn: the role's agent adapter, or the test agent's script. */
-export function invocation(roleName: Role, role: ResolvedRole, root: string, promptFile: string, env: Env): Invocation {
+export function invocation(roleName: Role, role: ResolvedRole, root: string, promptFile: string, env: Env, cwd = root): Invocation {
   if (role.agent === TEST_AGENT) {
     if (role.script === undefined || !testAgentsEnabled(env)) throw new Error(`agent "${TEST_AGENT}" requires GDT_TEST_AGENTS=1 and a script`);
     return { argv: ["/bin/sh", resolve(root, role.script)], env: { GDT_PROMPT_FILE: promptFile }, stdin: null };
   }
   const adapter = adapterFor(role.agent);
   if (adapter === undefined) throw new Error(`no adapter for agent "${role.agent}" yet`);
-  return adapter.buildInvocation(roleName, role.model, promptFile, root);
+  return adapter.buildInvocation(roleName, role.model, promptFile, cwd);
 }
 
 function log(line: string): void {
@@ -171,6 +171,8 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     log("invalid config; run gdt doctor");
     return finish(78);
   }
+  // #76 AC-1/AC-2: the turn and its boundary check run where the supervisor found the head.
+  const workdir = dispatch.workdir ?? root;
   const promptFile = p.prompt(dispatch.key);
   // AC-2: a retried turn is told how its previous record was rejected. Reading the state (rather than
   // the dispatch file) avoids a race with the worker that started before `gdt retry` finished.
@@ -189,7 +191,7 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
 
   let inv: Invocation;
   try {
-    inv = invocation(role, roleConfig, root, promptFile, env);
+    inv = invocation(role, roleConfig, root, promptFile, env, workdir);
   } catch (err) {
     log(err instanceof Error ? err.message : String(err));
     return finish(127);
@@ -207,9 +209,9 @@ async function turn(root: string, role: Role, dispatch: Dispatch, env: Env, p: R
     GDT_ISSUE_BODY_SHA256: dispatch.issue_body_sha256,
     GDT_DISPATCH_KEY: dispatch.key,
   };
-  const before = checkout(root, env);
-  const exitCode = await runInvocation(inv, root, turnEnv, (pid) => writeFileSync(p.agent(dispatch.key), `${pid}\n`));
-  const violation = boundaryViolation(role, before, root, env);
+  const before = checkout(workdir, env);
+  const exitCode = await runInvocation(inv, workdir, turnEnv, (pid) => writeFileSync(p.agent(dispatch.key), `${pid}\n`));
+  const violation = boundaryViolation(role, before, workdir, env);
   if (violation !== undefined) log(violation);
   return finish(exitCode, violation);
 }
